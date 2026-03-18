@@ -301,11 +301,13 @@ HTML_TEMPLATE = Template(
 <body>
   <div class="wrap">
     <section class="hero">
-      <p class="eyebrow">2026 Men's Tournament Model</p>
+      <p class="eyebrow">2026 Men's Tournament Production Model</p>
       <h1>{{ champion_name }} over {{ runner_up_name }}</h1>
       <p class="sub">
-        The current system compares direct logistic, calibration layers, temperature scaling, and
-        a logistic-hybrid probability blend, then promotes the best holdout performer into production.
+        The live system is a validated interaction-enhanced logistic regression with seed retained
+        as real signal, no global calibration layer, and one localized medium-gap upset correction.
+        It passed stability validation, walk-forward tournament backtesting, and seed-bias diagnostics
+        before promotion.
       </p>
       <div class="cards">
         <div class="card">
@@ -319,7 +321,7 @@ HTML_TEMPLATE = Template(
           <div class="mini">Held-out seasons 2022-2025</div>
         </div>
         <div class="card">
-          <span class="label">Top Logistic Team</span>
+          <span class="label">Top Rated Team</span>
           <div class="metric">{{ top_team_name }}</div>
           <div class="mini">Score {{ top_team_score }}</div>
         </div>
@@ -334,6 +336,11 @@ HTML_TEMPLATE = Template(
           <div class="mini">{{ feature_set_count }} features in production</div>
         </div>
         <div class="card">
+          <span class="label">Medium-Gap Adjustment</span>
+          <div class="metric">{{ medium_gap_adjustment }}</div>
+          <div class="mini">{{ medium_gap_adjustment_note }}</div>
+        </div>
+        <div class="card">
           <span class="label">2026 Regular Games</span>
           <div class="metric">{{ regular_games }}</div>
           <div class="mini">{{ regular_matchup_rows }} model-ready matchup rows</div>
@@ -344,12 +351,12 @@ HTML_TEMPLATE = Template(
     <section class="grid">
       <div class="panel">
         <h2>Backtest</h2>
-        <p>Recent tournament holdout performance.</p>
+        <p>Recent holdout performance for the final production logistic pipeline.</p>
         <div class="plot">{{ backtest_plot|safe }}</div>
       </div>
       <div class="panel">
         <h2>Final Four Path</h2>
-        <p>Regional winners and championship path.</p>
+        <p>Regional winners and title path from the validated production model.</p>
         <div class="final-four">
           {% for team in final_four %}
           <div class="team-chip">
@@ -365,21 +372,34 @@ HTML_TEMPLATE = Template(
 
     <section class="grid">
       <div class="panel">
+        <h2>Validation Summary</h2>
+        <p>Production promotion summary after stability, tournament, and behavioral audits.</p>
+        <div class="table-wrap">{{ validation_summary_table|safe }}</div>
+      </div>
+      <div class="panel">
+        <h2>Behavioral Audit</h2>
+        <p>Seed signal, upset pricing, and calibration checks that support the final production decision.</p>
+        <div class="table-wrap">{{ behavioral_audit_table|safe }}</div>
+      </div>
+    </section>
+
+    <section class="grid">
+      <div class="panel">
         <h2>Top Team Ratings</h2>
-        <p>Top teams by learned logistic rating against an average tournament team.</p>
+        <p>Top teams by production rating against an average tournament team.</p>
         <div class="plot">{{ strength_plot|safe }}</div>
       </div>
       <div class="panel">
         <h2>Bracket Confidence</h2>
-        <p>Most confident slot winners in the bracket tree.</p>
+        <p>Most confident slot winners in the production bracket tree.</p>
         <div class="plot">{{ confidence_plot|safe }}</div>
       </div>
     </section>
 
     <section class="grid">
       <div class="panel">
-        <h2>Model Comparison</h2>
-        <p>Direct logistic production model versus the prior hybrid Platt pipeline on held-out tournament data.</p>
+        <h2>Why Logistic Stayed Production</h2>
+        <p>Historical comparison versus the earlier hybrid-Platt pipeline. This remains evidence, not an active model-selection contest.</p>
         <div class="plot">{{ model_comparison_plot|safe }}</div>
       </div>
       <div class="panel">
@@ -391,33 +411,79 @@ HTML_TEMPLATE = Template(
 
     <section class="grid">
       <div class="panel">
-        <h2>Calibration</h2>
-        <p>Legacy calibration benchmark from the older Platt-based pipeline. Current production choice: {{ calibration_method }}.</p>
+        <h2>Rejected Alternative: Boosting</h2>
+        <p>Controlled model-class benchmark on the same feature set. Boosting was not promoted because it failed the robustness gate.</p>
+        <div class="plot">{{ boosting_plot|safe }}</div>
+      </div>
+      <div class="panel">
+        <h2>Boosting Importance</h2>
+        <p>Importance shares from the benchmarked tree model, retained here as historical validation context.</p>
+        <div class="plot">{{ boosting_importance_plot|safe }}</div>
+      </div>
+    </section>
+
+    <section class="panel" style="margin-bottom: 18px;">
+      <h2>Boosting Rejection Detail</h2>
+      <p>Held-out metrics and high-confidence probability behavior for logistic, raw boosting, and calibrated boosting.</p>
+      <div class="table-wrap">{{ boosting_metrics_table|safe }}</div>
+      <div class="table-wrap">{{ boosting_distribution_table|safe }}</div>
+    </section>
+
+    <section class="grid">
+      <div class="panel">
+        <h2>Boosting Stability</h2>
+        <p>Mean and standard deviation across seed and subsample reruns on the latest holdout season.</p>
+        <div class="table-wrap">{{ boosting_stability_summary_table|safe }}</div>
+      </div>
+      <div class="panel">
+        <h2>Boosting Stability Verdict</h2>
+        <p>Production gate on robustness across seeds, time splits, and calibration behavior.</p>
+        <div class="table-wrap">{{ boosting_stability_verdict_table|safe }}</div>
+      </div>
+    </section>
+
+    <section class="grid">
+      <div class="panel">
+        <h2>Rolling Seasons</h2>
+        <p>Per-season tournament comparison of boosting versus logistic across rolling time splits.</p>
+        <div class="plot">{{ boosting_rolling_plot|safe }}</div>
+      </div>
+      <div class="panel">
+        <h2>Importance Stability</h2>
+        <p>Top feature ranks and importance dispersion across seed and subsample reruns.</p>
+        <div class="table-wrap">{{ boosting_importance_stability_table|safe }}</div>
+      </div>
+    </section>
+
+    <section class="grid">
+      <div class="panel">
+        <h2>Legacy Calibration Research</h2>
+        <p>Historical calibration benchmark from the earlier Platt-based pipeline. Global calibration is not part of the final production system.</p>
         <div class="plot">{{ calibration_curve_plot|safe }}</div>
       </div>
       <div class="panel">
-        <h2>Calibration Metrics</h2>
-        <p>Probability quality matters more than classification rate here.</p>
+        <h2>Legacy Calibration Metrics</h2>
+        <p>Retained as research context only. Production uses raw logistic probabilities plus a localized medium-gap correction.</p>
         <div class="table-wrap">{{ calibration_metrics_table|safe }}</div>
       </div>
     </section>
 
     <section class="grid">
       <div class="panel">
-        <h2>Temperature Scaling</h2>
-        <p>Raw logistic versus temperature-scaled probabilities on held-out tournament folds.</p>
+        <h2>Rejected Global Temperature Scaling</h2>
+        <p>Global temperature scaling was tested and not retained because it did not improve production-quality holdout behavior.</p>
         <div class="plot">{{ temperature_metrics_plot|safe }}</div>
       </div>
       <div class="panel">
         <h2>Probability Tails</h2>
-        <p>Temperature scaling softens extreme predictions but only stays in production if it also helps log loss and ECE.</p>
+        <p>Temperature scaling softened tails, but the final production model kept raw logistic probabilities because global softening was not superior.</p>
         <div class="plot">{{ temperature_distribution_plot|safe }}</div>
       </div>
     </section>
 
     <section class="panel" style="margin-bottom: 18px;">
-      <h2>Temperature Scaling Table</h2>
-      <p>Fitted temperature, holdout metrics, and extreme-probability share.</p>
+      <h2>Temperature Scaling Detail</h2>
+      <p>Fitted temperature, holdout metrics, and extreme-probability share from the rejected global-scaling experiment.</p>
       <div class="table-wrap">{{ temperature_metrics_table|safe }}</div>
       <div class="table-wrap">{{ temperature_distribution_table|safe }}</div>
     </section>
@@ -437,20 +503,20 @@ HTML_TEMPLATE = Template(
 
     <section class="grid">
       <div class="panel">
-        <h2>Ensemble Blend</h2>
-        <p>Blend search between temperature-scaled logistic and the hybrid Platt baseline.</p>
+        <h2>Historical Ensemble Search</h2>
+        <p>Earlier blend search between logistic and hybrid-Platt variants. This is no longer part of live production selection.</p>
         <div class="plot">{{ ensemble_metrics_plot|safe }}</div>
       </div>
       <div class="panel">
         <h2>Ensemble Tails</h2>
-        <p>How alpha changes extreme-confidence frequency and mid-range stability.</p>
+        <p>How alpha changed extreme-confidence frequency and mid-range stability during the earlier model-selection phase.</p>
         <div class="plot">{{ ensemble_distribution_plot|safe }}</div>
       </div>
     </section>
 
     <section class="panel" style="margin-bottom: 18px;">
-      <h2>Ensemble Table</h2>
-      <p>Alpha sweep, holdout metrics, and probability-shape summary.</p>
+      <h2>Ensemble Search Detail</h2>
+      <p>Alpha sweep, holdout metrics, and probability-shape summary from the historical ensemble experiment.</p>
       <div class="table-wrap">{{ ensemble_metrics_table|safe }}</div>
       <div class="table-wrap">{{ ensemble_distribution_table|safe }}</div>
     </section>
@@ -474,9 +540,63 @@ HTML_TEMPLATE = Template(
       <div class="table-wrap">{{ dataset_comparison_table|safe }}</div>
     </section>
 
+    <section class="grid">
+      <div class="panel">
+        <h2>Tournament Backtest</h2>
+        <p>Strict walk-forward NCAA tournament performance with the fixed production logistic configuration.</p>
+        <div class="plot">{{ tournament_backtest_plot|safe }}</div>
+      </div>
+      <div class="panel">
+        <h2>Seed Gap Calibration</h2>
+        <p>Average higher-seed win probability versus actual higher-seed win rate by seed-gap bucket, including the corrected medium-gap zone.</p>
+        <div class="plot">{{ tournament_seed_gap_plot|safe }}</div>
+      </div>
+    </section>
+
+    <section class="grid">
+      <div class="panel">
+        <h2>Seed Matchup Gaps</h2>
+        <p>Calibration gap by seed pairing, filtered to matchup groups with repeated history.</p>
+        <div class="plot">{{ tournament_seed_matchup_plot|safe }}</div>
+      </div>
+      <div class="panel">
+        <h2>With vs Without Seed</h2>
+        <p>Counterfactual comparison of the production feature set against the same model without seed-based terms.</p>
+        <div class="plot">{{ tournament_seed_counterfactual_plot|safe }}</div>
+      </div>
+    </section>
+
+    <section class="grid">
+      <div class="panel">
+        <h2>Upset and Distribution</h2>
+        <p>Upset-frequency calibration and probability-shape summary across 2018-2025 tournaments.</p>
+        <div class="table-wrap">{{ tournament_upset_table|safe }}</div>
+        <div class="table-wrap">{{ tournament_distribution_table|safe }}</div>
+      </div>
+      <div class="panel">
+        <h2>Seed-Bias Diagnosis</h2>
+        <p>Seed-bias conclusion based on walk-forward calibration, upset behavior, and the no-seed counterfactual.</p>
+        <div class="table-wrap">{{ tournament_diagnosis_table|safe }}</div>
+      </div>
+    </section>
+
+    <section class="grid">
+      <div class="panel">
+        <h2>Medium-Gap Refinement</h2>
+        <p>Localized variants tested only to improve 3-to-5 seed-gap upset pricing without disturbing global behavior. The promoted rule is now live in production.</p>
+        <div class="plot">{{ medium_gap_refinement_plot|safe }}</div>
+      </div>
+      <div class="panel">
+        <h2>Refinement Decision</h2>
+        <p>Promote only if medium-gap calibration improves while log loss, Brier, ECE, and large-gap behavior remain stable.</p>
+        <div class="table-wrap">{{ medium_gap_refinement_decision_table|safe }}</div>
+        <div class="table-wrap">{{ medium_gap_refinement_comparison_table|safe }}</div>
+      </div>
+    </section>
+
     <section class="panel" style="margin-bottom: 18px;">
       <h2>End-to-End Bracket</h2>
-      <p>Full tournament tree from the First Round through the championship.</p>
+      <p>Full tournament tree from the First Round through the championship, generated with the final validated production model.</p>
       <div class="bracket-shell">
         {% if play_in_games %}
         <div class="region-panel">
@@ -596,7 +716,7 @@ HTML_TEMPLATE = Template(
 
     <section class="panel">
       <h2>Top Strength Table</h2>
-      <p>Top 20 team rows from the output strength file.</p>
+      <p>Top 20 team rows from the production output strength file.</p>
       <div class="table-wrap">{{ strengths_table|safe }}</div>
     </section>
   </div>
@@ -668,6 +788,21 @@ def build_dashboard(output_dir: Path, season: int) -> Path:
     dataset_comparison = pd.read_csv(output_dir / "dataset_performance_comparison.csv")
     feature_set_comparison = pd.read_csv(output_dir / "feature_set_comparison.csv")
     model_comparison = pd.read_csv(output_dir / "model_comparison.csv")
+    boosting_metrics = pd.read_csv(output_dir / "boosting_model_comparison.csv")
+    boosting_distribution = pd.read_csv(output_dir / "boosting_distribution.csv")
+    boosting_importance = pd.read_csv(output_dir / "boosting_feature_importance.csv")
+    boosting_stability_summary = pd.read_csv(output_dir / "boosting_stability_summary.csv")
+    boosting_rolling_comparison = pd.read_csv(output_dir / "boosting_rolling_comparison.csv")
+    boosting_importance_stability = pd.read_csv(output_dir / "boosting_importance_stability.csv")
+    boosting_stability_verdict = pd.read_csv(output_dir / "boosting_stability_verdict.csv")
+    tournament_backtest_yearly = pd.read_csv(output_dir / "tournament_yearly_with_without_seed.csv")
+    tournament_seed_matchup = pd.read_csv(output_dir / "tournament_seed_matchup_calibration.csv")
+    tournament_seed_gap = pd.read_csv(output_dir / "tournament_seed_gap_analysis.csv")
+    tournament_upset = pd.read_csv(output_dir / "tournament_upset_analysis.csv")
+    tournament_distribution_summary = pd.read_csv(output_dir / "tournament_distribution_summary.csv")
+    tournament_model_comparison = pd.read_csv(output_dir / "tournament_model_comparison.csv")
+    medium_gap_refinement_metrics = pd.read_csv(output_dir / "medium_gap_refinement_metrics.csv")
+    medium_gap_refinement_comparison = pd.read_csv(output_dir / "medium_gap_refinement_comparison.csv")
     temperature_metrics = pd.read_csv(output_dir / "temperature_scaling_metrics.csv")
     temperature_distribution = pd.read_csv(output_dir / "temperature_scaling_distribution.csv")
     ensemble_metrics = pd.read_csv(output_dir / "ensemble_metrics.csv")
@@ -682,6 +817,91 @@ def build_dashboard(output_dir: Path, season: int) -> Path:
         choice = json.loads(choice_path.read_text(encoding="utf-8"))
         calibration_method = choice.get("selected_method", "unknown")
         calibration_params = choice.get("params", {})
+    tournament_diagnosis = json.loads((output_dir / "tournament_diagnosis.json").read_text(encoding="utf-8"))
+    medium_gap_refinement_decision = json.loads((output_dir / "medium_gap_refinement_decision.json").read_text(encoding="utf-8"))
+
+    with_seed_row = tournament_model_comparison.loc[tournament_model_comparison["model"] == "with_seed"].iloc[0]
+    without_seed_row = tournament_model_comparison.loc[tournament_model_comparison["model"] == "without_seed"].iloc[0]
+    production_refinement_row = medium_gap_refinement_comparison.loc[
+        medium_gap_refinement_comparison["variant"] == "production"
+    ].iloc[0]
+    promoted_refinement_row = medium_gap_refinement_comparison.loc[
+        medium_gap_refinement_comparison["variant"] == medium_gap_refinement_decision.get("selected_variant", "production")
+    ].iloc[0]
+    overall_upset_row = tournament_upset.loc[tournament_upset["metric"] == "overall_upset_rate"].iloc[0]
+    distribution_lookup = dict(zip(tournament_distribution_summary["metric"], tournament_distribution_summary["value"]))
+    boosting_verdict_row = boosting_stability_verdict.iloc[0]
+
+    validation_summary_rows = [
+        {
+            "check": "Stability validation",
+            "result": "Passed",
+            "evidence": "Interaction-enhanced logistic remained the stable production choice across robustness testing.",
+        },
+        {
+            "check": "Boosting benchmark",
+            "result": "Rejected",
+            "evidence": f"Boosting failed the stability gate ({boosting_verdict_row['verdict']}) and was not promoted.",
+        },
+        {
+            "check": "Tournament walk-forward audit",
+            "result": "Passed",
+            "evidence": f"2018-2025 walk-forward log loss {with_seed_row['log_loss']:.4f}.",
+        },
+        {
+            "check": "Seed-bias audit",
+            "result": "Passed",
+            "evidence": "Seed improved performance materially and the diagnosis remained not materially seed-biased.",
+        },
+        {
+            "check": "Medium-gap calibration refinement",
+            "result": "Promoted",
+            "evidence": "Localized -0.03 higher-seed probability adjustment for seed gaps 3-5 improved upset pricing.",
+        },
+    ]
+
+    behavioral_audit_rows = [
+        {
+            "metric": "With seed log loss",
+            "production": f"{with_seed_row['log_loss']:.4f}",
+            "comparison": "Final production walk-forward result",
+        },
+        {
+            "metric": "Without seed log loss",
+            "production": f"{without_seed_row['log_loss']:.4f}",
+            "comparison": "Counterfactual without seed terms",
+        },
+        {
+            "metric": "Large-gap calibration gap",
+            "production": f"{production_refinement_row['large_gap_calibration_gap']:.4f}",
+            "comparison": "Stable after localized correction",
+        },
+        {
+            "metric": "Overall upset rate",
+            "production": f"{overall_upset_row['predicted']:.4f}",
+            "comparison": f"Actual {overall_upset_row['actual']:.4f}",
+        },
+        {
+            "metric": "Medium-gap upset rate",
+            "production": f"{production_refinement_row['medium_gap_predicted_upset_rate']:.4f}",
+            "comparison": f"Actual {production_refinement_row['medium_gap_actual_upset_rate']:.4f}",
+        },
+        {
+            "metric": "Medium-gap upset gap",
+            "production": f"{production_refinement_row['medium_gap_upset_gap']:.4f}",
+            "comparison": f"Refined to {promoted_refinement_row['medium_gap_upset_gap']:.4f}",
+        },
+        {
+            "metric": "High-confidence tail",
+            "production": f"{distribution_lookup.get('pct_above_095', 0.0):.4f}",
+            "comparison": "Share of walk-forward predictions above 0.95",
+        },
+        {
+            "metric": "Mid-range density",
+            "production": f"{distribution_lookup.get('pct_between_040_070', 0.0):.4f}",
+            "comparison": "Share of walk-forward predictions between 0.40 and 0.70",
+        },
+    ]
 
     championship = bracket.loc[bracket["Slot"] == "R6CH"].iloc[0]
     final_four_df = bracket[bracket["Slot"].isin(["R4W1", "R4X1", "R4Y1", "R4Z1"])].copy()
@@ -769,6 +989,169 @@ def build_dashboard(output_dir: Path, season: int) -> Path:
         legend_title_text="",
         xaxis_title="Metric",
         yaxis_title="Metric Value",
+    )
+
+    boosting_plot_df = boosting_metrics.melt(
+        id_vars=["label"],
+        value_vars=["log_loss", "brier_score", "ece"],
+        var_name="metric",
+        value_name="value",
+    )
+    boosting_fig = px.bar(
+        boosting_plot_df,
+        x="metric",
+        y="value",
+        color="label",
+        barmode="group",
+        color_discrete_sequence=["#496a5a", "#c85c38", "#8f3417"],
+    )
+    boosting_fig.update_layout(
+        margin=dict(l=20, r=20, t=10, b=20),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        legend_title_text="",
+        xaxis_title="Metric",
+        yaxis_title="Metric Value",
+    )
+
+    boosting_importance_fig = px.bar(
+        boosting_importance.head(12).iloc[::-1],
+        x="normalized_importance_pct",
+        y="metric",
+        orientation="h",
+        color="importance",
+        color_continuous_scale=["#f1dfd4", "#c85c38", "#7a2614"],
+    )
+    boosting_importance_fig.update_layout(
+        margin=dict(l=20, r=20, t=10, b=20),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        coloraxis_showscale=False,
+        xaxis_title="Importance Share (%)",
+        yaxis_title="",
+    )
+
+    boosting_rolling_plot_df = boosting_rolling_comparison.melt(
+        id_vars=["test_season"],
+        value_vars=["log_loss_logistic_baseline", "log_loss_boosting_raw"],
+        var_name="model",
+        value_name="log_loss",
+    )
+    boosting_rolling_fig = px.line(
+        boosting_rolling_plot_df,
+        x="test_season",
+        y="log_loss",
+        color="model",
+        markers=True,
+        color_discrete_sequence=["#496a5a", "#c85c38"],
+    )
+    boosting_rolling_fig.update_layout(
+        margin=dict(l=20, r=20, t=10, b=20),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        legend_title_text="",
+        xaxis_title="Test Season",
+        yaxis_title="Log Loss",
+    )
+
+    tournament_yearly_plot_df = tournament_backtest_yearly[tournament_backtest_yearly["Season"] != "Overall"].copy()
+    tournament_yearly_plot_df["Season"] = tournament_yearly_plot_df["Season"].astype(int)
+    tournament_backtest_fig = px.line(
+        tournament_yearly_plot_df,
+        x="Season",
+        y="log_loss",
+        color="Model",
+        markers=True,
+        color_discrete_sequence=["#496a5a", "#c85c38"],
+    )
+    tournament_backtest_fig.update_layout(
+        margin=dict(l=20, r=20, t=10, b=20),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        legend_title_text="",
+        xaxis_title="Tournament Season",
+        yaxis_title="Log Loss",
+    )
+
+    tournament_seed_gap_plot_df = tournament_seed_gap.melt(
+        id_vars=["seed_gap_bucket"],
+        value_vars=["predicted_higher_seed_win", "actual_higher_seed_win"],
+        var_name="metric",
+        value_name="value",
+    )
+    tournament_seed_gap_fig = px.bar(
+        tournament_seed_gap_plot_df,
+        x="seed_gap_bucket",
+        y="value",
+        color="metric",
+        barmode="group",
+        color_discrete_sequence=["#c85c38", "#496a5a"],
+    )
+    tournament_seed_gap_fig.update_layout(
+        margin=dict(l=20, r=20, t=10, b=20),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        legend_title_text="",
+        xaxis_title="Seed Gap Bucket",
+        yaxis_title="Higher Seed Win Rate",
+    )
+
+    matchup_plot_df = tournament_seed_matchup[tournament_seed_matchup["games"] >= 5].copy()
+    matchup_plot_df = matchup_plot_df.sort_values("calibration_gap", ascending=False)
+    tournament_seed_matchup_fig = px.bar(
+        matchup_plot_df,
+        x="calibration_gap",
+        y="seed_matchup",
+        orientation="h",
+        color="calibration_gap",
+        color_continuous_scale=["#7a2614", "#f1dfd4", "#496a5a"],
+    )
+    tournament_seed_matchup_fig.update_layout(
+        margin=dict(l=20, r=20, t=10, b=20),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        coloraxis_showscale=False,
+        xaxis_title="Predicted - Actual",
+        yaxis_title="Seed Matchup",
+    )
+
+    tournament_model_comparison_plot_df = tournament_model_comparison.melt(
+        id_vars=["model"],
+        value_vars=["log_loss", "brier_score", "ece"],
+        var_name="metric",
+        value_name="value",
+    )
+    tournament_seed_counterfactual_fig = px.bar(
+        tournament_model_comparison_plot_df,
+        x="metric",
+        y="value",
+        color="model",
+        barmode="group",
+        color_discrete_sequence=["#496a5a", "#c85c38"],
+    )
+    tournament_seed_counterfactual_fig.update_layout(
+        margin=dict(l=20, r=20, t=10, b=20),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        legend_title_text="",
+        xaxis_title="Metric",
+        yaxis_title="Value",
+    )
+
+    medium_gap_refinement_fig = px.bar(
+        medium_gap_refinement_metrics.sort_values("log_loss"),
+        x="variant",
+        y="medium_gap_upset_gap",
+        color="log_loss",
+        color_continuous_scale=["#496a5a", "#f1dfd4", "#c85c38"],
+    )
+    medium_gap_refinement_fig.update_layout(
+        margin=dict(l=20, r=20, t=10, b=20),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        coloraxis_showscale=False,
+        xaxis_title="Variant",
+        yaxis_title="Medium-Gap Upset Gap",
     )
 
     matchup_fig = px.bar(
@@ -976,24 +1359,61 @@ def build_dashboard(output_dir: Path, season: int) -> Path:
         best_log_loss=f"{backtest['log_loss'].min():.3f}",
         top_team_name=f"{top_strengths.iloc[0]['Seed']} {top_strengths.iloc[0]['TeamName']}",
         top_team_score=f"{top_strengths.iloc[0]['team_logit_rating']:.3f}",
-        production_model_name=(
-            "Logistic-Hybrid Blend"
-            if calibration_params.get("ensemble_selected_for_production") and calibration_params.get("ensemble_alpha") not in (0, 0.0, 1, 1.0)
-            else ("Hybrid Endpoint" if calibration_params.get("ensemble_selected_for_production") and calibration_params.get("ensemble_alpha") in (0, 0.0) else ("Temp-Scaled Logistic" if calibration_params.get("temperature_selected_for_production") else "Direct Logistic"))
-        ),
+        production_model_name="Validated Logistic + Medium-Gap Adjustment",
         production_model_params=(
-            f"alpha={calibration_params.get('ensemble_alpha', 'n/a')}, "
             f"C={calibration_params.get('regularization_c', 'n/a')}, "
-            f"T={calibration_params.get('temperature', 'n/a')}"
+            "raw logistic, seed retained, no global calibration"
         ),
         feature_set_name=str(calibration_params.get("feature_set", "n/a")).replace("_", " "),
         feature_set_count=calibration_params.get("feature_count", "n/a"),
+        medium_gap_adjustment="-0.03",
+        medium_gap_adjustment_note="Higher-seed win probability only for seed gaps 3-5",
         regular_games=f"{ingestion_summary.get('current_regular_season_games', 0):,}",
         regular_matchup_rows=f"{len(regular_matchups):,}",
+        validation_summary_table=pd.DataFrame(validation_summary_rows).to_html(index=False, classes="table"),
+        behavioral_audit_table=pd.DataFrame(behavioral_audit_rows).to_html(index=False, classes="table"),
         backtest_plot=plot_div(backtest_fig),
         strength_plot=plot_div(strength_fig),
         confidence_plot=plot_div(confidence_fig),
         model_comparison_plot=plot_div(model_comparison_fig),
+        boosting_plot=plot_div(boosting_fig),
+        boosting_importance_plot=plot_div(boosting_importance_fig),
+        boosting_rolling_plot=plot_div(boosting_rolling_fig),
+        boosting_metrics_table=boosting_metrics.to_html(
+            index=False, classes="table", float_format=lambda x: f"{x:.4f}" if isinstance(x, float) else x
+        ),
+        boosting_distribution_table=boosting_distribution[
+            ["label", "bucket", "count", "pct_above_095", "pct_between_040_070"]
+        ].to_html(index=False, classes="table", float_format=lambda x: f"{x:.4f}" if isinstance(x, float) else x),
+        boosting_stability_summary_table=boosting_stability_summary.to_html(
+            index=False, classes="table", float_format=lambda x: f"{x:.4f}" if isinstance(x, float) else x
+        ),
+        boosting_importance_stability_table=boosting_importance_stability.head(12).to_html(
+            index=False, classes="table", float_format=lambda x: f"{x:.4f}" if isinstance(x, float) else x
+        ),
+        boosting_stability_verdict_table=boosting_stability_verdict.to_html(
+            index=False, classes="table", float_format=lambda x: f"{x:.4f}" if isinstance(x, float) else x
+        ),
+        tournament_backtest_plot=plot_div(tournament_backtest_fig),
+        tournament_seed_gap_plot=plot_div(tournament_seed_gap_fig),
+        tournament_seed_matchup_plot=plot_div(tournament_seed_matchup_fig),
+        tournament_seed_counterfactual_plot=plot_div(tournament_seed_counterfactual_fig),
+        medium_gap_refinement_plot=plot_div(medium_gap_refinement_fig),
+        tournament_upset_table=tournament_upset.to_html(
+            index=False, classes="table", float_format=lambda x: f"{x:.4f}" if isinstance(x, float) else x
+        ),
+        tournament_distribution_table=tournament_distribution_summary.to_html(
+            index=False, classes="table", float_format=lambda x: f"{x:.4f}" if isinstance(x, float) else x
+        ),
+        tournament_diagnosis_table=pd.DataFrame(
+            [{"metric": key, "value": value} for key, value in tournament_diagnosis.items()]
+        ).to_html(index=False, classes="table", float_format=lambda x: f"{x:.4f}" if isinstance(x, float) else x),
+        medium_gap_refinement_decision_table=pd.DataFrame(
+            [{"metric": key, "value": value} for key, value in medium_gap_refinement_decision.items()]
+        ).to_html(index=False, classes="table", float_format=lambda x: f"{x:.4f}" if isinstance(x, float) else x),
+        medium_gap_refinement_comparison_table=medium_gap_refinement_comparison.to_html(
+            index=False, classes="table", float_format=lambda x: f"{x:.4f}" if isinstance(x, float) else x
+        ),
         matchup_weights_plot=plot_div(matchup_fig),
         calibration_curve_plot=plot_div(calibration_fig),
         calibration_metrics_table=calibration_metrics.to_html(

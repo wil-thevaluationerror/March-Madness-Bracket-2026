@@ -1,0 +1,5 @@
+metric,value
+pct_above_095,0.05555555555555555
+pct_between_040_070,0.4166666666666667
+mean_probability,0.7150896076747868
+actual_higher_seed_win_rate,0.7243589743589743

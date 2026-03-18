@@ -22,5 +22,20 @@
       "temperature": 1.0
     }
   },
-  "dataset_variant": "tournament_plus_regular_season"
+  "dataset_variant": "tournament_plus_regular_season",
+  "boosting_benchmark": {
+    "label": "logistic_baseline",
+    "log_loss": 0.5491171952476038,
+    "brier_score": 0.18465707306292578,
+    "ece": 0.06806033968572926
+  },
+  "boosting_stability": {
+    "verdict": "unstable_hold",
+    "seed_edge_consistent": false,
+    "time_edge_consistent": false,
+    "log_loss_std_tight": true,
+    "calibration_ok": false,
+    "seed_log_loss_delta": -0.09187009707014437,
+    "rolling_win_rate": 0.0
+  }
 }

@@ -1,0 +1,2 @@
+verdict,seed_edge_consistent,time_edge_consistent,log_loss_std_tight,calibration_ok,seed_log_loss_delta,rolling_win_rate
+unstable_hold,False,False,True,False,-0.12270231788690822,0.0

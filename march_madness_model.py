@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import json
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
+
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
 
 import numpy as np
 import pandas as pd
@@ -14,8 +20,10 @@ from sklearn.preprocessing import FunctionTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import brier_score_loss, log_loss
+from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
+from sklearn.tree import DecisionTreeRegressor
 
 
 DATA_DIR = Path("/Users/wilcroutwater/Downloads/march-machine-learning-mania-2026")
@@ -138,6 +146,39 @@ class CalibrationBundle:
     params: dict[str, float | str]
 
 
+@dataclass
+class TreeBoostingModel:
+    preprocessor: ColumnTransformer
+    trees: list[tuple[DecisionTreeRegressor, np.ndarray]]
+    feature_order: list[str]
+    init_score: float
+    learning_rate: float
+    feature_importance_: np.ndarray
+
+    def _transform(self, X: pd.DataFrame) -> np.ndarray:
+        transformed = self.preprocessor.transform(X[self.feature_order])
+        return transformed.toarray() if hasattr(transformed, "toarray") else np.asarray(transformed)
+
+    def decision_function(self, X: pd.DataFrame) -> np.ndarray:
+        X_arr = self._transform(X)
+        raw_scores = np.full(X_arr.shape[0], self.init_score, dtype=float)
+        for tree, feature_idx in self.trees:
+            raw_scores += self.learning_rate * tree.predict(X_arr[:, feature_idx])
+        return raw_scores
+
+    def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
+        prob = logits_to_probabilities(self.decision_function(X))
+        return np.column_stack([1.0 - prob, prob])
+
+
+@dataclass
+class BoostingArrayCache:
+    X_array: np.ndarray
+    y_array: np.ndarray
+    feature_order: list[str]
+    preprocessor: ColumnTransformer
+
+
 PLATT_C_GRID = [0.02, 0.05, 0.1, 0.2, 0.5, 1.0]
 PLATT_BLEND_GRID = [0.15, 0.3, 0.45, 0.6]
 PLATT_CLIP_VALUE = 2.5
@@ -146,6 +187,9 @@ MIN_PREGAME_GAMES = 5
 TEMPERATURE_GRID = [0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.75, 2.0, 2.25, 2.5]
 ENSEMBLE_ALPHA_GRID = [0.0, 0.25, 0.5, 0.75, 1.0]
 LOGISTIC_C_GRID = [0.2, 0.5, 1.0]
+BOOSTING_STABILITY_SEEDS = [11, 23, 37, 51, 73]
+BOOSTING_SUBSAMPLE_DROP_FRAC = 0.1
+MEDIUM_GAP_PROBABILITY_LIFT = 0.03
 
 
 def parse_seed(seed: str) -> int:
@@ -988,6 +1032,128 @@ def fit_base_model(X: pd.DataFrame, y: pd.Series, seed_shrinkage: float = 1.0, c
     ).fit(X, y)
 
 
+def build_boosting_array_cache(X: pd.DataFrame, y: pd.Series) -> BoostingArrayCache:
+    feature_columns = list(X.columns)
+    preprocessor = ColumnTransformer(
+        transformers=[
+            (
+                "num",
+                Pipeline(
+                    steps=[
+                        ("imputer", SimpleImputer(strategy="median")),
+                    ]
+                ),
+                feature_columns,
+            )
+        ]
+    )
+    X_arr = preprocessor.fit_transform(X[feature_columns])
+    X_arr = X_arr.toarray() if hasattr(X_arr, "toarray") else np.asarray(X_arr)
+    y_arr = np.asarray(y, dtype=float)
+    return BoostingArrayCache(
+        X_array=X_arr,
+        y_array=y_arr,
+        feature_order=feature_columns,
+        preprocessor=preprocessor,
+    )
+
+
+def compute_train_val_indices(y_array: np.ndarray, seed: int) -> tuple[np.ndarray, np.ndarray]:
+    all_idx = np.arange(len(y_array))
+    train_idx, val_idx = train_test_split(
+        all_idx,
+        test_size=0.15,
+        random_state=seed,
+        stratify=y_array.astype(int),
+    )
+    return np.asarray(train_idx), np.asarray(val_idx)
+
+
+def fit_boosting_model_from_array(
+    cache: BoostingArrayCache,
+    seed: int = 42,
+    train_idx: np.ndarray | None = None,
+    val_idx: np.ndarray | None = None,
+) -> TreeBoostingModel:
+    X_arr = cache.X_array
+    y_arr = cache.y_array
+
+    if train_idx is None or val_idx is None:
+        train_idx, val_idx = compute_train_val_indices(y_arr, seed)
+
+    X_train = X_arr[train_idx]
+    X_val = X_arr[val_idx]
+    y_train = y_arr[train_idx]
+    y_val = y_arr[val_idx]
+
+    base_rate = float(np.clip(y_train.mean(), 1e-6, 1 - 1e-6))
+    init_score = float(np.log(base_rate / (1 - base_rate)))
+    learning_rate = 0.05
+    max_estimators = 225
+    max_depth = 3
+    subsample = 0.7
+    colsample = 0.8
+    patience = 20
+    tol = 1e-4
+    min_samples_leaf = 20
+    rng = np.random.default_rng(seed)
+
+    raw_train = np.full(len(y_train), init_score, dtype=float)
+    raw_val = np.full(len(y_val), init_score, dtype=float)
+    trees: list[tuple[DecisionTreeRegressor, np.ndarray]] = []
+    feature_importance = np.zeros(X_arr.shape[1], dtype=float)
+    best_val_loss = log_loss(y_val, logits_to_probabilities(raw_val), labels=[0, 1])
+    best_tree_count = 0
+    rounds_without_improvement = 0
+
+    for iteration in range(max_estimators):
+        residual = y_train - logits_to_probabilities(raw_train)
+        row_idx = rng.choice(len(y_train), size=max(50, int(len(y_train) * subsample)), replace=False)
+        feature_idx = np.sort(
+            rng.choice(X_arr.shape[1], size=max(1, int(np.ceil(X_arr.shape[1] * colsample))), replace=False)
+        )
+        tree = DecisionTreeRegressor(
+            max_depth=max_depth,
+            min_samples_leaf=min_samples_leaf,
+            random_state=seed + iteration,
+        )
+        tree.fit(X_train[row_idx][:, feature_idx], residual[row_idx])
+        raw_train += learning_rate * tree.predict(X_train[:, feature_idx])
+        raw_val += learning_rate * tree.predict(X_val[:, feature_idx])
+        trees.append((tree, feature_idx))
+        feature_importance[feature_idx] += np.abs(tree.feature_importances_)
+
+        current_val_loss = log_loss(y_val, logits_to_probabilities(raw_val), labels=[0, 1])
+        if current_val_loss + tol < best_val_loss:
+            best_val_loss = current_val_loss
+            best_tree_count = len(trees)
+            rounds_without_improvement = 0
+        else:
+            rounds_without_improvement += 1
+            if rounds_without_improvement >= patience:
+                break
+
+    kept_trees = trees[:best_tree_count] if best_tree_count else trees
+    if best_tree_count and best_tree_count < len(trees):
+        feature_importance = np.zeros(X_arr.shape[1], dtype=float)
+        for tree, feature_idx in kept_trees:
+            feature_importance[feature_idx] += np.abs(tree.feature_importances_)
+
+    return TreeBoostingModel(
+        preprocessor=cache.preprocessor,
+        trees=kept_trees,
+        feature_order=cache.feature_order,
+        init_score=init_score,
+        learning_rate=learning_rate,
+        feature_importance_=feature_importance,
+    )
+
+
+def fit_boosting_model(X: pd.DataFrame, y: pd.Series, seed: int = 42) -> TreeBoostingModel:
+    cache = build_boosting_array_cache(X, y)
+    return fit_boosting_model_from_array(cache, seed=seed)
+
+
 def base_model_raw_score(model: Pipeline, X: pd.DataFrame) -> np.ndarray:
     return model.decision_function(X)
 
@@ -1107,6 +1273,16 @@ def predict_temperature_scaled_proba(raw_scores: np.ndarray, temperature: float)
     return logits_to_probabilities(np.asarray(raw_scores, dtype=float) / temperature)
 
 
+def apply_medium_gap_probability_adjustment(features: pd.DataFrame, probabilities: np.ndarray, lift: float) -> np.ndarray:
+    adjusted = np.asarray(probabilities, dtype=float).copy()
+    if lift == 0.0 or "seed_edge" not in features.columns:
+        return clip_probabilities(adjusted)
+    seed_gap_abs = pd.Series(features["seed_edge"]).abs().to_numpy(dtype=float)
+    medium_gap_mask = (seed_gap_abs >= 3.0) & (seed_gap_abs <= 5.0)
+    adjusted[medium_gap_mask] = adjusted[medium_gap_mask] - lift
+    return clip_probabilities(adjusted)
+
+
 def predict_calibrated_proba(
     base_model: Pipeline,
     calibration_bundle: CalibrationBundle | None,
@@ -1164,6 +1340,16 @@ def build_matchup_feature_weights_report(model: Pipeline) -> pd.DataFrame:
         lambda value: "team A advantage" if value > 0 else "team B advantage"
     )
     return weights.sort_values("abs_coefficient", ascending=False)
+
+
+def build_boosting_feature_importance_report(model: TreeBoostingModel) -> pd.DataFrame:
+    importance_df = pd.DataFrame({"metric": model.feature_order, "importance": model.feature_importance_})
+    importance_df["abs_importance"] = importance_df["importance"].abs()
+    total_abs = importance_df["abs_importance"].sum()
+    importance_df["normalized_importance_pct"] = (
+        100 * importance_df["abs_importance"] / total_abs if total_abs else 0.0
+    )
+    return importance_df.sort_values("importance", ascending=False).reset_index(drop=True)
 
 
 def build_model_comparison_report(calibration_metrics: pd.DataFrame) -> pd.DataFrame:
@@ -1399,6 +1585,354 @@ def build_ensemble_report(
         reliability_df,
         distribution_summary,
     )
+
+
+def build_boosting_benchmark_report(
+    X: pd.DataFrame,
+    y: pd.Series,
+    seasons: pd.Series,
+    source_labels: pd.Series,
+    prediction_season: int,
+) -> tuple[TreeBoostingModel, CalibrationBundle, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    available_seasons = sorted(int(season) for season in pd.Series(seasons[source_labels == "tournament"]).unique())
+    fold_test_seasons = [season for season in available_seasons if prediction_season - 5 <= season <= prediction_season - 1]
+
+    metrics_rows: list[dict[str, float | str]] = []
+    reliability_frames: list[pd.DataFrame] = []
+    distribution_frames: list[pd.DataFrame] = []
+
+    for fold_test_season in fold_test_seasons:
+        calibration_seasons = [season for season in [fold_test_season - 2, fold_test_season - 1] if season in available_seasons]
+        if len(calibration_seasons) < 2:
+            continue
+        train_mask = ((source_labels == "tournament") & (seasons < min(calibration_seasons))) | (
+            (source_labels == "regular_season") & (seasons <= fold_test_season)
+        )
+        calibration_mask = (source_labels == "tournament") & seasons.isin(calibration_seasons)
+        fold_test_mask = (source_labels == "tournament") & (seasons == fold_test_season)
+        if train_mask.sum() == 0 or calibration_mask.sum() == 0 or fold_test_mask.sum() == 0:
+            continue
+
+        logistic_model = fit_base_model(X.loc[train_mask], y.loc[train_mask], seed_shrinkage=1.0, c_value=0.2)
+        logistic_prob = clip_probabilities(logistic_model.predict_proba(X.loc[fold_test_mask])[:, 1])
+
+        fold_cache = build_boosting_array_cache(X.loc[train_mask], y.loc[train_mask])
+        fold_train_idx, fold_val_idx = compute_train_val_indices(fold_cache.y_array, 42)
+        boosting_model = fit_boosting_model_from_array(fold_cache, seed=42, train_idx=fold_train_idx, val_idx=fold_val_idx)
+        boosting_raw_scores = base_model_raw_score(boosting_model, X.loc[fold_test_mask])
+        boosting_raw_prob = clip_probabilities(boosting_model.predict_proba(X.loc[fold_test_mask])[:, 1])
+
+        boosting_calibration_scores = base_model_raw_score(boosting_model, X.loc[calibration_mask])
+        boosting_platt = fit_platt_model(
+            boosting_calibration_scores,
+            y.loc[calibration_mask],
+            c_value=1.0,
+            clip_value=PLATT_CLIP_VALUE,
+        )
+        boosting_platt_prob = predict_platt_model(boosting_platt, boosting_raw_scores)
+
+        for label, probs in [
+            ("logistic_baseline", logistic_prob),
+            ("boosting_raw", boosting_raw_prob),
+            ("boosting_platt", boosting_platt_prob),
+        ]:
+            metrics_rows.append(
+                {
+                    "fold_test_season": fold_test_season,
+                    **evaluate_probability_predictions(y.loc[fold_test_mask], probs, label),
+                }
+            )
+            reliability_frames.append(build_reliability_curve(y.loc[fold_test_mask], probs, label))
+            distribution_frames.append(
+                pd.DataFrame(
+                    {
+                        "label": label,
+                        "fold_test_season": fold_test_season,
+                        "probability": probs,
+                        "bucket": pd.cut(
+                            probs,
+                            bins=[0.0, 0.1, 0.2, 0.4, 0.6, 0.8, 0.95, 1.0],
+                            include_lowest=True,
+                        ).astype(str),
+                    }
+                )
+            )
+
+    metrics_df = pd.DataFrame(metrics_rows)
+    summary_df = (
+        metrics_df.groupby("label", dropna=False)[["log_loss", "brier_score", "ece"]]
+        .mean()
+        .reset_index()
+        .sort_values(["log_loss", "brier_score", "ece"])
+    )
+
+    distribution_df = pd.concat(distribution_frames, ignore_index=True)
+    distribution_summary = (
+        distribution_df.groupby(["label", "bucket"], dropna=False)
+        .size()
+        .reset_index(name="count")
+        .sort_values(["label", "bucket"])
+    )
+    extreme_summary = distribution_df.groupby("label")["probability"].agg(
+        mean_probability="mean",
+        median_probability="median",
+        pct_above_095=lambda s: float((s > 0.95).mean()),
+        pct_between_040_070=lambda s: float(((s >= 0.4) & (s <= 0.7)).mean()),
+    ).reset_index()
+    distribution_summary = distribution_summary.merge(extreme_summary, on="label", how="left")
+    reliability_df = pd.concat(reliability_frames, ignore_index=True)
+
+    final_train_mask = ((source_labels == "tournament") & (seasons < prediction_season)) | (
+        (source_labels == "regular_season") & (seasons <= prediction_season)
+    )
+    final_calibration_mask = (source_labels == "tournament") & seasons.isin([prediction_season - 3, prediction_season - 2])
+    final_cache = build_boosting_array_cache(X.loc[final_train_mask], y.loc[final_train_mask])
+    final_train_idx, final_val_idx = compute_train_val_indices(final_cache.y_array, 42)
+    final_boosting_model = fit_boosting_model_from_array(final_cache, seed=42, train_idx=final_train_idx, val_idx=final_val_idx)
+    final_boosting_scores = base_model_raw_score(final_boosting_model, X.loc[final_calibration_mask])
+    final_platt = fit_platt_model(
+        final_boosting_scores,
+        y.loc[final_calibration_mask],
+        c_value=1.0,
+        clip_value=PLATT_CLIP_VALUE,
+    )
+    calibration_bundle = CalibrationBundle(
+        method="baseline_platt",
+        calibrator=final_platt,
+        params={"c_value": 1.0, "blend_weight": 1.0, "clip_value": PLATT_CLIP_VALUE, "ensemble_type": "single"},
+    )
+    return final_boosting_model, calibration_bundle, summary_df, reliability_df, distribution_summary
+
+
+def build_boosting_stability_report(
+    X: pd.DataFrame,
+    y: pd.Series,
+    seasons: pd.Series,
+    source_labels: pd.Series,
+    prediction_season: int,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    available_seasons = sorted(int(season) for season in pd.Series(seasons[source_labels == "tournament"]).unique())
+    fold_test_seasons = [season for season in available_seasons if prediction_season - 5 <= season <= prediction_season - 1]
+    X_np = X.to_numpy(dtype=float, copy=False)
+    y_np = np.asarray(y, dtype=float)
+    seasons_np = np.asarray(seasons, dtype=int)
+    source_np = np.asarray(source_labels)
+    latest_test_season = prediction_season - 1
+    latest_calibration_seasons = [
+        season for season in [latest_test_season - 2, latest_test_season - 1] if season in available_seasons
+    ]
+    latest_train_mask = ((source_np == "tournament") & (seasons_np < min(latest_calibration_seasons))) | (
+        (source_np == "regular_season") & (seasons_np <= latest_test_season)
+    )
+    latest_test_mask = (source_np == "tournament") & (seasons_np == latest_test_season)
+    latest_train_idx = np.flatnonzero(latest_train_mask)
+    latest_test_idx = np.flatnonzero(latest_test_mask)
+
+    logistic_latest = fit_base_model(X.loc[latest_train_mask], y.loc[latest_train_mask], seed_shrinkage=1.0, c_value=0.2)
+    logistic_latest_prob = clip_probabilities(logistic_latest.predict_proba(X.loc[latest_test_mask])[:, 1])
+    logistic_latest_metrics = evaluate_probability_predictions(y.loc[latest_test_mask], logistic_latest_prob, "logistic_baseline")
+
+    latest_cache = build_boosting_array_cache(X.iloc[latest_train_idx], y.iloc[latest_train_idx])
+    latest_test_df = X.iloc[latest_test_idx]
+
+    def run_seed_trial(seed: int) -> tuple[dict[str, float | int | str], pd.DataFrame]:
+        train_idx, val_idx = compute_train_val_indices(latest_cache.y_array, seed)
+        boosting_model = fit_boosting_model_from_array(latest_cache, seed=seed, train_idx=train_idx, val_idx=val_idx)
+        boosting_prob = clip_probabilities(boosting_model.predict_proba(latest_test_df)[:, 1])
+        metrics = evaluate_probability_predictions(y.iloc[latest_test_idx], boosting_prob, "boosting_raw")
+        row = {
+            "experiment": "seed_robustness",
+            "seed": seed,
+            "model": "boosting_raw",
+            "test_season": latest_test_season,
+            **metrics,
+            "pct_above_095": float((boosting_prob > 0.95).mean()),
+            "pct_between_040_070": float(((boosting_prob >= 0.4) & (boosting_prob <= 0.7)).mean()),
+        }
+        importance_df = build_boosting_feature_importance_report(boosting_model).reset_index(drop=True)
+        importance_df["rank"] = np.arange(1, len(importance_df) + 1)
+        importance_df["seed"] = seed
+        importance_df["experiment"] = "seed_robustness"
+        return row, importance_df
+
+    with ThreadPoolExecutor(max_workers=min(4, len(BOOSTING_STABILITY_SEEDS))) as executor:
+        seed_results = list(executor.map(run_seed_trial, BOOSTING_STABILITY_SEEDS))
+    seed_rows = [row for row, _ in seed_results]
+    importance_rows: list[pd.DataFrame] = [df for _, df in seed_results]
+
+    def run_subsample_trial(seed: int) -> tuple[dict[str, float | int | str], pd.DataFrame]:
+        rng = np.random.default_rng(1000 + seed)
+        keep_count = max(100, int(np.floor(len(latest_train_idx) * (1 - BOOSTING_SUBSAMPLE_DROP_FRAC))))
+        keep_pos = np.sort(rng.choice(np.arange(len(latest_train_idx)), size=keep_count, replace=False))
+        subsample_cache = BoostingArrayCache(
+            X_array=latest_cache.X_array[keep_pos],
+            y_array=latest_cache.y_array[keep_pos],
+            feature_order=latest_cache.feature_order,
+            preprocessor=latest_cache.preprocessor,
+        )
+        train_idx, val_idx = compute_train_val_indices(subsample_cache.y_array, seed)
+        subsample_model = fit_boosting_model_from_array(subsample_cache, seed=seed, train_idx=train_idx, val_idx=val_idx)
+        subsample_prob = clip_probabilities(subsample_model.predict_proba(latest_test_df)[:, 1])
+        metrics = evaluate_probability_predictions(y.iloc[latest_test_idx], subsample_prob, "boosting_subsample")
+        row = {
+            "experiment": "subsample_stability",
+            "seed": seed,
+            "model": "boosting_subsample",
+            "test_season": latest_test_season,
+            **metrics,
+            "pct_above_095": float((subsample_prob > 0.95).mean()),
+            "pct_between_040_070": float(((subsample_prob >= 0.4) & (subsample_prob <= 0.7)).mean()),
+        }
+        importance_df = build_boosting_feature_importance_report(subsample_model).reset_index(drop=True)
+        importance_df["rank"] = np.arange(1, len(importance_df) + 1)
+        importance_df["seed"] = seed
+        importance_df["experiment"] = "subsample_stability"
+        return row, importance_df
+
+    with ThreadPoolExecutor(max_workers=min(4, len(BOOSTING_STABILITY_SEEDS))) as executor:
+        subsample_results = list(executor.map(run_subsample_trial, BOOSTING_STABILITY_SEEDS))
+    subsample_rows = [row for row, _ in subsample_results]
+    importance_rows.extend(df for _, df in subsample_results)
+
+    seed_subsample_df = pd.DataFrame(seed_rows + subsample_rows)
+    logistic_summary_row = {
+        "experiment": "logistic_baseline",
+        "seed": -1,
+        "model": "logistic_baseline",
+        "test_season": latest_test_season,
+        **logistic_latest_metrics,
+        "pct_above_095": float((logistic_latest_prob > 0.95).mean()),
+        "pct_between_040_070": float(((logistic_latest_prob >= 0.4) & (logistic_latest_prob <= 0.7)).mean()),
+    }
+    seed_subsample_with_baseline = pd.concat([pd.DataFrame([logistic_summary_row]), seed_subsample_df], ignore_index=True)
+    seed_summary = (
+        seed_subsample_with_baseline.groupby(["experiment", "model"], dropna=False)[
+            ["log_loss", "brier_score", "ece", "pct_above_095", "pct_between_040_070"]
+        ]
+        .agg(["mean", "std"])
+        .reset_index()
+    )
+    seed_summary.columns = [
+        "experiment",
+        "model",
+        "log_loss_mean",
+        "log_loss_std",
+        "brier_score_mean",
+        "brier_score_std",
+        "ece_mean",
+        "ece_std",
+        "pct_above_095_mean",
+        "pct_above_095_std",
+        "pct_between_040_070_mean",
+        "pct_between_040_070_std",
+    ]
+
+    split_cache: dict[int, tuple[BoostingArrayCache, np.ndarray, np.ndarray, np.ndarray]] = {}
+    for fold_test_season in fold_test_seasons:
+        calibration_seasons = [season for season in [fold_test_season - 2, fold_test_season - 1] if season in available_seasons]
+        if len(calibration_seasons) < 2:
+            continue
+        train_mask = ((source_np == "tournament") & (seasons_np < min(calibration_seasons))) | (
+            (source_np == "regular_season") & (seasons_np <= fold_test_season)
+        )
+        test_mask = (source_np == "tournament") & (seasons_np == fold_test_season)
+        train_idx_global = np.flatnonzero(train_mask)
+        test_idx_global = np.flatnonzero(test_mask)
+        logistic_model = fit_base_model(X.loc[train_mask], y.loc[train_mask], seed_shrinkage=1.0, c_value=0.2)
+        if fold_test_season not in split_cache:
+            fold_cache = build_boosting_array_cache(X.iloc[train_idx_global], y.iloc[train_idx_global])
+            fold_train_idx, fold_val_idx = compute_train_val_indices(fold_cache.y_array, 42)
+            split_cache[fold_test_season] = (fold_cache, fold_train_idx, fold_val_idx, test_idx_global)
+    def run_rolling_trial(fold_test_season: int) -> list[dict[str, float | int | str]]:
+        fold_cache, fold_train_idx, fold_val_idx, fold_test_idx = split_cache[fold_test_season]
+        calibration_seasons = [season for season in [fold_test_season - 2, fold_test_season - 1] if season in available_seasons]
+        train_mask = ((source_np == "tournament") & (seasons_np < min(calibration_seasons))) | (
+            (source_np == "regular_season") & (seasons_np <= fold_test_season)
+        )
+        logistic_model = fit_base_model(X.loc[train_mask], y.loc[train_mask], seed_shrinkage=1.0, c_value=0.2)
+        boosting_model = fit_boosting_model_from_array(fold_cache, seed=42, train_idx=fold_train_idx, val_idx=fold_val_idx)
+        logistic_prob = clip_probabilities(logistic_model.predict_proba(X.iloc[fold_test_idx])[:, 1])
+        boosting_prob = clip_probabilities(boosting_model.predict_proba(X.iloc[fold_test_idx])[:, 1])
+        rows: list[dict[str, float | int | str]] = []
+        for model_name, probs in [("logistic_baseline", logistic_prob), ("boosting_raw", boosting_prob)]:
+            rows.append(
+                {
+                    "test_season": fold_test_season,
+                    "model": model_name,
+                    **evaluate_probability_predictions(y.iloc[fold_test_idx], probs, model_name),
+                    "pct_above_095": float((probs > 0.95).mean()),
+                    "pct_between_040_070": float(((probs >= 0.4) & (probs <= 0.7)).mean()),
+                }
+            )
+        return rows
+
+    with ThreadPoolExecutor(max_workers=min(4, len(split_cache))) as executor:
+        rolling_rows = [row for rows in executor.map(run_rolling_trial, list(split_cache.keys())) for row in rows]
+    rolling_df = pd.DataFrame(rolling_rows)
+    rolling_comparison = (
+        rolling_df.pivot_table(
+            index="test_season",
+            columns="model",
+            values=["log_loss", "brier_score", "ece"],
+        )
+        .reset_index()
+    )
+    rolling_comparison.columns = [
+        "_".join([str(part) for part in col if str(part) != ""]).strip("_") for col in rolling_comparison.columns.to_flat_index()
+    ]
+    rolling_comparison["log_loss_improvement"] = (
+        rolling_comparison["log_loss_logistic_baseline"] - rolling_comparison["log_loss_boosting_raw"]
+    )
+    rolling_comparison["brier_improvement"] = (
+        rolling_comparison["brier_score_logistic_baseline"] - rolling_comparison["brier_score_boosting_raw"]
+    )
+    rolling_comparison["ece_improvement"] = (
+        rolling_comparison["ece_logistic_baseline"] - rolling_comparison["ece_boosting_raw"]
+    )
+
+    importance_stability = pd.concat(importance_rows, ignore_index=True)
+    importance_summary = (
+        importance_stability.groupby("metric", dropna=False)[["importance", "rank"]]
+        .agg(["mean", "std"])
+        .reset_index()
+    )
+    importance_summary.columns = ["metric", "importance_mean", "importance_std", "rank_mean", "rank_std"]
+    top3_rate = (
+        importance_stability.groupby("metric", dropna=False)["rank"]
+        .apply(lambda s: float((s <= 3).mean()))
+        .reset_index(name="top3_rate")
+    )
+    importance_summary = importance_summary.merge(top3_rate, on="metric", how="left")
+    importance_summary = importance_summary.sort_values(["rank_mean", "importance_mean"], ascending=[True, False]).reset_index(drop=True)
+
+    stable_seed_edge = bool(
+        seed_summary.loc[seed_summary["model"] == "boosting_raw", "log_loss_mean"].iloc[0]
+        < seed_summary.loc[seed_summary["model"] == "logistic_baseline", "log_loss_mean"].iloc[0]
+    )
+    stable_time_edge = bool((rolling_comparison["log_loss_improvement"] > 0).mean() >= 0.6)
+    tight_variance = bool(seed_summary.loc[seed_summary["model"] == "boosting_raw", "log_loss_std"].iloc[0] <= 0.003)
+    calibration_ok = bool(
+        seed_summary.loc[seed_summary["model"] == "boosting_raw", "ece_mean"].iloc[0]
+        <= seed_summary.loc[seed_summary["model"] == "logistic_baseline", "ece_mean"].iloc[0] + 0.005
+    )
+    verdict = "stable_to_promote" if stable_seed_edge and stable_time_edge and tight_variance and calibration_ok else "unstable_hold"
+    verdict_df = pd.DataFrame(
+        [
+            {
+                "verdict": verdict,
+                "seed_edge_consistent": stable_seed_edge,
+                "time_edge_consistent": stable_time_edge,
+                "log_loss_std_tight": tight_variance,
+                "calibration_ok": calibration_ok,
+                "seed_log_loss_delta": float(
+                    seed_summary.loc[seed_summary["model"] == "logistic_baseline", "log_loss_mean"].iloc[0]
+                    - seed_summary.loc[seed_summary["model"] == "boosting_raw", "log_loss_mean"].iloc[0]
+                ),
+                "rolling_win_rate": float((rolling_comparison["log_loss_improvement"] > 0).mean()),
+            }
+        ]
+    )
+    return seed_summary, rolling_comparison, seed_subsample_with_baseline, importance_summary, verdict_df
 
 
 def build_feature_set_report(
@@ -2004,16 +2538,22 @@ def predict_submission(
         team_stats,
     )
     selected_columns = feature_columns or ALL_FEATURE_COLUMNS
+    selected_features = features[selected_columns]
     if ensemble_alpha is not None and temperature is not None:
-        season_submission["Pred"] = predict_ensemble_proba(
-            model, calibration, features[selected_columns], temperature, ensemble_alpha
+        raw_pred = predict_ensemble_proba(
+            model, calibration, selected_features, temperature, ensemble_alpha
         )
     elif temperature is None:
-        season_submission["Pred"] = predict_calibrated_proba(
-            model, calibration, features[selected_columns], calibration.method
+        raw_pred = predict_calibrated_proba(
+            model, calibration, selected_features, calibration.method
         )
     else:
-        season_submission["Pred"] = predict_with_temperature(model, features[selected_columns], temperature)
+        raw_pred = predict_with_temperature(model, selected_features, temperature)
+    season_submission["Pred"] = apply_medium_gap_probability_adjustment(
+        selected_features,
+        raw_pred,
+        MEDIUM_GAP_PROBABILITY_LIFT,
+    )
     return season_submission[["ID", "Pred"]]
 
 
@@ -2033,13 +2573,19 @@ def win_probability(
     game = pd.DataFrame({"Season": [season], "TeamAID": [team_a], "TeamBID": [team_b], "RoundNum": [round_num]})
     features = matchup_feature_frame(game, team_stats)
     selected_columns = feature_columns or ALL_FEATURE_COLUMNS
+    selected_features = features[selected_columns]
     if ensemble_alpha is not None and temperature is not None:
-        return float(predict_ensemble_proba(model, calibration, features[selected_columns], temperature, ensemble_alpha)[0])
-    if temperature is None:
-        return float(
-            predict_calibrated_proba(model, calibration, features[selected_columns], calibration.method)[0]
-        )
-    return float(predict_with_temperature(model, features[selected_columns], temperature)[0])
+        raw_prob = predict_ensemble_proba(model, calibration, selected_features, temperature, ensemble_alpha)
+    elif temperature is None:
+        raw_prob = predict_calibrated_proba(model, calibration, selected_features, calibration.method)
+    else:
+        raw_prob = predict_with_temperature(model, selected_features, temperature)
+    adjusted_prob = apply_medium_gap_probability_adjustment(
+        selected_features,
+        raw_prob,
+        MEDIUM_GAP_PROBABILITY_LIFT,
+    )
+    return float(adjusted_prob[0])
 
 
 def simulate_bracket(
@@ -2164,6 +2710,24 @@ def main() -> None:
     ensemble_fit, ensemble_metrics, ensemble_reliability, ensemble_distribution = build_ensemble_report(
         combined_X[selected_feature_columns], combined_y, combined_seasons, combined_source, args.season
     )
+    (
+        boosting_model,
+        boosting_calibration_bundle,
+        boosting_metrics,
+        boosting_reliability,
+        boosting_distribution,
+    ) = build_boosting_benchmark_report(
+        combined_X[selected_feature_columns], combined_y, combined_seasons, combined_source, args.season
+    )
+    (
+        boosting_stability_summary,
+        boosting_rolling_comparison,
+        boosting_stability_runs,
+        boosting_importance_stability,
+        boosting_stability_verdict,
+    ) = build_boosting_stability_report(
+        combined_X[selected_feature_columns], combined_y, combined_seasons, combined_source, args.season
+    )
 
     final_train_mask = ((combined_source == "tournament") & (combined_seasons < args.season)) | (
         (combined_source == "regular_season") & (combined_seasons <= args.season)
@@ -2237,6 +2801,15 @@ def main() -> None:
     ensemble_metrics_path = args.output_dir / "ensemble_metrics.csv"
     ensemble_reliability_path = args.output_dir / "ensemble_reliability.csv"
     ensemble_distribution_path = args.output_dir / "ensemble_distribution.csv"
+    boosting_metrics_path = args.output_dir / "boosting_model_comparison.csv"
+    boosting_reliability_path = args.output_dir / "boosting_reliability.csv"
+    boosting_distribution_path = args.output_dir / "boosting_distribution.csv"
+    boosting_importance_path = args.output_dir / "boosting_feature_importance.csv"
+    boosting_stability_summary_path = args.output_dir / "boosting_stability_summary.csv"
+    boosting_rolling_comparison_path = args.output_dir / "boosting_rolling_comparison.csv"
+    boosting_stability_runs_path = args.output_dir / "boosting_stability_runs.csv"
+    boosting_importance_stability_path = args.output_dir / "boosting_importance_stability.csv"
+    boosting_stability_verdict_path = args.output_dir / "boosting_stability_verdict.csv"
     cleaned_regular_games_path = args.output_dir / f"regular_season_games_{args.season}.csv"
     current_regular_model_path = args.output_dir / f"regular_season_matchups_{args.season}.csv"
     ingestion_summary_path = args.output_dir / "regular_season_ingestion_summary.json"
@@ -2261,6 +2834,15 @@ def main() -> None:
     ensemble_metrics.to_csv(ensemble_metrics_path, index=False)
     ensemble_reliability.to_csv(ensemble_reliability_path, index=False)
     ensemble_distribution.to_csv(ensemble_distribution_path, index=False)
+    boosting_metrics.to_csv(boosting_metrics_path, index=False)
+    boosting_reliability.to_csv(boosting_reliability_path, index=False)
+    boosting_distribution.to_csv(boosting_distribution_path, index=False)
+    build_boosting_feature_importance_report(boosting_model).to_csv(boosting_importance_path, index=False)
+    boosting_stability_summary.to_csv(boosting_stability_summary_path, index=False)
+    boosting_rolling_comparison.to_csv(boosting_rolling_comparison_path, index=False)
+    boosting_stability_runs.to_csv(boosting_stability_runs_path, index=False)
+    boosting_importance_stability.to_csv(boosting_importance_stability_path, index=False)
+    boosting_stability_verdict.to_csv(boosting_stability_verdict_path, index=False)
     cleaned_regular_games.to_csv(cleaned_regular_games_path, index=False)
     current_regular_model_ready.to_csv(current_regular_model_path, index=False)
     calibration_choice_path.write_text(
@@ -2274,6 +2856,7 @@ def main() -> None:
                     "penalty": "l2",
                     "temperature": selected_temperature,
                     "temperature_selected_for_production": use_temperature_scaling,
+                    "medium_gap_probability_lift": MEDIUM_GAP_PROBABILITY_LIFT,
                     "ensemble_alpha": selected_alpha,
                     "ensemble_selected_for_production": use_ensemble,
                     "feature_set": selected_feature_set,
@@ -2286,6 +2869,8 @@ def main() -> None:
                     .to_dict(),
                 },
                 "dataset_variant": "tournament_plus_regular_season",
+                "boosting_benchmark": boosting_metrics.iloc[0].to_dict(),
+                "boosting_stability": boosting_stability_verdict.iloc[0].to_dict(),
             },
             indent=2,
         ),
@@ -2331,6 +2916,15 @@ def main() -> None:
     print(f"Saved ensemble metrics to {ensemble_metrics_path}")
     print(f"Saved ensemble reliability to {ensemble_reliability_path}")
     print(f"Saved ensemble distribution to {ensemble_distribution_path}")
+    print(f"Saved boosting comparison to {boosting_metrics_path}")
+    print(f"Saved boosting reliability to {boosting_reliability_path}")
+    print(f"Saved boosting distribution to {boosting_distribution_path}")
+    print(f"Saved boosting feature importance to {boosting_importance_path}")
+    print(f"Saved boosting stability summary to {boosting_stability_summary_path}")
+    print(f"Saved boosting rolling comparison to {boosting_rolling_comparison_path}")
+    print(f"Saved boosting stability runs to {boosting_stability_runs_path}")
+    print(f"Saved boosting importance stability to {boosting_importance_stability_path}")
+    print(f"Saved boosting stability verdict to {boosting_stability_verdict_path}")
     print(f"Saved cleaned regular season games to {cleaned_regular_games_path}")
     print(f"Saved model-ready regular season matchups to {current_regular_model_path}")
     print(f"Saved ingestion summary to {ingestion_summary_path}")
