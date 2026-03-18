@@ -1,0 +1,3 @@
+dataset_variant,selected_method,log_loss,brier_score,ece,c_value,blend_weight,ensemble_type
+tournament_only,hybrid_platt,0.5479626466353138,0.1845508030438947,0.07619525364206414,1.0,0.3,single
+tournament_plus_regular_season,hybrid_platt,0.5477344031313061,0.18469053495034152,0.06760544123795252,1.0,0.3,single

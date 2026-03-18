@@ -1,0 +1,26 @@
+{
+  "selected_method": "raw_logistic_regression",
+  "params": {
+    "regularization_c": 0.2,
+    "penalty": "l2",
+    "temperature": 1.2,
+    "temperature_selected_for_production": false,
+    "ensemble_alpha": 0.0,
+    "ensemble_selected_for_production": false,
+    "feature_set": "replace_both_interactions",
+    "feature_count": 12
+  },
+  "comparison_baseline": {
+    "feature_set": "baseline_compact",
+    "metrics": {
+      "feature_set": "baseline_compact",
+      "c_value": 1.0,
+      "variant": "raw_logistic",
+      "log_loss": 0.5523546367121815,
+      "brier_score": 0.18427686477622995,
+      "ece": 0.07535889346858303,
+      "temperature": 1.0
+    }
+  },
+  "dataset_variant": "tournament_plus_regular_season"
+}

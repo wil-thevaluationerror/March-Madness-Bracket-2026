@@ -1,0 +1,13 @@
+{
+  "current_season": 2026,
+  "current_regular_season_games": 5647,
+  "current_regular_season_model_rows": 9316,
+  "historical_tournament_training_games": 1449,
+  "historical_regular_season_training_games": 101160,
+  "leakage_controls": [
+    "Regular-season matchup features are built from pregame cumulative team stats shifted before each game.",
+    "Pregame POM ranks are merged with backward asof logic and no same-day forward lookup.",
+    "Calibration and holdout evaluation use tournament games only.",
+    "Final training uses regular-season data only through the prediction season and tournament data only from prior seasons."
+  ]
+}
