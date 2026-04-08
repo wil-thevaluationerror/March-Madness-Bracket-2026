@@ -533,6 +533,65 @@ class ExecutionEngineTestCase(unittest.TestCase):
         self.assertEqual(len(intents), 1)
         self.assertEqual(intents[0].qty, 2)
 
+    def test_add_atr_populates_5min_stop_sizing_series(self) -> None:
+        frame = pd.DataFrame(
+            [
+                {"ts_event": pd.Timestamp("2026-03-20 08:30:00", tz="America/Chicago"), "symbol": "MES", "open": 100.0, "high": 101.0, "low": 99.0, "close": 100.0, "volume": 100.0},
+                {"ts_event": pd.Timestamp("2026-03-20 08:31:00", tz="America/Chicago"), "symbol": "MES", "open": 100.0, "high": 102.0, "low": 100.0, "close": 101.0, "volume": 100.0},
+                {"ts_event": pd.Timestamp("2026-03-20 08:32:00", tz="America/Chicago"), "symbol": "MES", "open": 101.0, "high": 103.0, "low": 101.0, "close": 102.0, "volume": 100.0},
+                {"ts_event": pd.Timestamp("2026-03-20 08:33:00", tz="America/Chicago"), "symbol": "MES", "open": 102.0, "high": 104.0, "low": 102.0, "close": 103.0, "volume": 100.0},
+                {"ts_event": pd.Timestamp("2026-03-20 08:34:00", tz="America/Chicago"), "symbol": "MES", "open": 103.0, "high": 105.0, "low": 103.0, "close": 104.0, "volume": 100.0},
+                {"ts_event": pd.Timestamp("2026-03-20 08:35:00", tz="America/Chicago"), "symbol": "MES", "open": 104.0, "high": 106.0, "low": 104.0, "close": 105.0, "volume": 100.0},
+            ]
+        )
+
+        enriched = add_atr(frame)
+
+        self.assertIn("atr_5min", enriched.columns)
+        row_835 = enriched.loc[enriched["ts_event"] == pd.Timestamp("2026-03-20 08:35:00", tz="America/Chicago")].iloc[0]
+        self.assertEqual(row_835["atr"], 2.0)
+        self.assertEqual(row_835["atr_5min"], 4.0)
+
+    def test_generate_intents_skips_extended_breakout_entries(self) -> None:
+        config = TraderConfig()
+        config.strategy.max_entry_extension_atr = 0.75
+        frame = pd.DataFrame(
+            [
+                {
+                    "ts_event": pd.Timestamp("2026-03-20 08:30:00", tz="America/Chicago"),
+                    "symbol": "MES",
+                    "open": 100.0,
+                    "high": 100.5,
+                    "low": 99.75,
+                    "close": 100.0,
+                    "volume": 100.0,
+                    "ema_fast": 100.0,
+                    "ema_slow": 99.8,
+                    "vwap": 99.9,
+                    "atr": 1.0,
+                    "atr_median": 1.0,
+                },
+                {
+                    "ts_event": pd.Timestamp("2026-03-20 08:31:00", tz="America/Chicago"),
+                    "symbol": "MES",
+                    "open": 100.5,
+                    "high": 102.25,
+                    "low": 100.5,
+                    "close": 101.5,
+                    "volume": 140.0,
+                    "ema_fast": 101.2,
+                    "ema_slow": 100.3,
+                    "vwap": 100.4,
+                    "atr": 1.0,
+                    "atr_median": 1.0,
+                },
+            ]
+        )
+
+        intents = generate_intents(frame, config.strategy)
+
+        self.assertEqual(len(intents), 0)
+
     def test_topstep_50k_express_profile_sets_safe_runtime_defaults(self) -> None:
         config = build_config(PROFILE_TOPSTEP_50K_EXPRESS)
 
@@ -544,6 +603,7 @@ class ExecutionEngineTestCase(unittest.TestCase):
         self.assertEqual(config.risk.internal_daily_loss_limit, 500.0)
         self.assertEqual(config.risk.risk_budget_threshold, 125.0)
         self.assertEqual(config.risk.reentry_breakout_delta_min, -1_000_000_000.0)
+        self.assertEqual(config.risk.max_stop_distance_ticks, 80)
 
     def test_scheduler_supports_asia_pre_london_window(self) -> None:
         scheduler = SessionScheduler(self.config.session)

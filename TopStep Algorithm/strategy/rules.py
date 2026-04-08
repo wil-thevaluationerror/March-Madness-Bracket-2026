@@ -99,6 +99,7 @@ def generate_intents(df: pd.DataFrame, config: StrategyConfig | None = None) -> 
         vwap = float(getattr(row, "vwap", close_price))
         atr = max(float(getattr(row, "atr", 1.0) or 1.0), instrument.tick_size)
         atr_median = float(getattr(row, "atr_median", atr) or atr)
+        atr_pct = (atr / atr_median) if atr_median > 0 else 1.0
         breakout_level = float(getattr(row, "breakout_level", close_price) or close_price)
         breakdown_level = float(getattr(row, "breakdown_level", close_price) or close_price)
 
@@ -111,8 +112,6 @@ def generate_intents(df: pd.DataFrame, config: StrategyConfig | None = None) -> 
             side = Side.BUY
             trigger_level = breakout_level
             trend_distance = close_price - trigger_level
-            stop_price = close_price - atr
-            target_price = close_price + (2.0 * atr)
             trend_state = "ema_above_vwap_above"
             long_signal = True
             short_signal = False
@@ -120,15 +119,24 @@ def generate_intents(df: pd.DataFrame, config: StrategyConfig | None = None) -> 
             side = Side.SELL
             trigger_level = breakdown_level
             trend_distance = trigger_level - close_price
-            stop_price = close_price + atr
-            target_price = close_price - (2.0 * atr)
             trend_state = "ema_below_vwap_below"
             long_signal = False
             short_signal = True
 
+        extension = abs(close_price - trigger_level)
+        if extension > float(strategy_config.max_entry_extension_atr) * atr:
+            continue
+
         signal_key = (symbol, side)
         last_index = last_signal_index_by_key.get(signal_key)
         last_trigger_level = last_trigger_level_by_key.get(signal_key)
+
+        if is_long_setup:
+            stop_price = close_price - atr
+            target_price = close_price + (2.0 * atr)
+        else:
+            stop_price = close_price + atr
+            target_price = close_price - (2.0 * atr)
         if (
             last_index is not None
             and index - last_index <= strategy_config.reentry_cooldown_bars
@@ -172,7 +180,7 @@ def generate_intents(df: pd.DataFrame, config: StrategyConfig | None = None) -> 
                 {
                     "atr": atr,
                     "atr_median": atr_median,
-                    "atr_pct": (atr / atr_median) if atr_median > 0 else 1.0,
+                    "atr_pct": atr_pct,
                     "atr_extreme": bool(atr_median > 0 and atr > (3.0 * atr_median)),
                     "ema_fast": ema_fast,
                     "ema_slow": ema_slow,

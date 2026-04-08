@@ -85,7 +85,7 @@ class RiskLimits:
     reentry_signal_score_min: float = 0.9
     reentry_score_margin: float = 0.05
     max_stop_distance_pct: float = 0.02
-    max_stop_distance_ticks: int = 40
+    max_stop_distance_ticks: int = 80
     max_api_errors: int = 3
     max_slippage_ticks: int = 4
     cooldown_minutes: int = 30
@@ -111,6 +111,7 @@ class StrategyConfig:
     default_symbol: str = "MES"
     instrument_root_symbol: str = "MES"
     base_qty: int = 1
+    max_entry_extension_atr: float = 0.75
     default_entry_order_type: str = "MARKET"
     allow_lunch_trading: bool = False
     reentry_cooldown_bars: int = 5
