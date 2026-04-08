@@ -1,0 +1,45 @@
+# Data files
+data/*.dbn.zst
+data/*.dbn
+data/*.zst
+
+# Backtest output (large)
+output/
+
+# Runtime & state
+runtime_logs/
+*.jsonl
+state/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+.eggs/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Secrets / credentials
+.env
+*.key
+*.pem
+credentials*.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Misc build artifacts
+generate_audit_pdf.py
