@@ -161,6 +161,28 @@ def _build_live_feed(
     return feed
 
 
+def _log_runtime_config(engine: ExecutionEngine, mode: TradingMode, profile: str | None) -> None:
+    log = logging.getLogger(__name__)
+    cfg = engine.config
+    symbol = cfg.strategy.preferred_symbol or cfg.strategy.default_symbol
+    log.info(
+        "runtime_startup mode=%s profile=%s symbol=%s base_qty=%d",
+        mode.value,
+        profile or "default",
+        symbol,
+        cfg.strategy.base_qty,
+    )
+    for window in cfg.session.session_windows:
+        log.info(
+            "session_window label=%s market_open=%s no_new_trades_after=%s force_flatten_at=%s tz=%s",
+            window.label,
+            window.market_open.strftime("%H:%M"),
+            window.no_new_trades_after.strftime("%H:%M"),
+            window.force_flatten_at.strftime("%H:%M"),
+            cfg.session.timezone,
+        )
+
+
 def run_loop(
     mode: TradingMode,
     poll_seconds: int,
@@ -173,6 +195,8 @@ def run_loop(
     engine = build_runtime(mode, profile=profile)
     if not engine.startup():
         raise SystemExit("Startup failed: broker state not clean.")
+
+    _log_runtime_config(engine, mode, profile)
 
     diagnostics_logger: StrategyDiagnosticsLogger | None = None
     if diagnostics_enabled and mode in (TradingMode.MOCK, TradingMode.PAPER):
