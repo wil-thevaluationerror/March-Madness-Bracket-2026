@@ -1,0 +1,3 @@
+# Core runtime dependencies
+aiohttp>=3.9          # SignalR WebSocket client for PAPER/LIVE modes
+python-dotenv>=1.0    # Load credentials from .env file
