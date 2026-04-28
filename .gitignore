@@ -1,0 +1,20 @@
+__pycache__/
+*.pyc
+runtime_logs/
+
+# TopStep temporary canonical runtime: source is tracked, local runtime artifacts are not.
+TopStep_Algorithm/.env
+TopStep_Algorithm/.env.*
+TopStep_Algorithm/logs/
+TopStep_Algorithm/runtime_logs/
+TopStep_Algorithm/output/
+TopStep_Algorithm/.pytest_cache/
+TopStep_Algorithm/**/__pycache__/
+TopStep_Algorithm/**/*.pyc
+TopStep_Algorithm/data/*.zip
+TopStep_Algorithm/data/*.dbn*
+TopStep_Algorithm/data/*.zst
+TopStep_Algorithm/**/*.csv
+TopStep_Algorithm/**/*.parquet
+TopStep_Algorithm/state/
+TopStep_Algorithm/local_data/
