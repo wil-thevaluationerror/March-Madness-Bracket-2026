@@ -65,6 +65,8 @@ class TopstepLiveFeed:
         *,
         warmup_bars: int = 150,
         rolling_window: int = 300,
+        diagnostics_callback: Callable[[dict[str, Any]], None] | None = None,
+        risk_allowed_provider: Callable[[], bool | None] | None = None,
     ) -> None:
         self.config = config
         self.token_provider = token_provider
@@ -72,6 +74,8 @@ class TopstepLiveFeed:
         self.symbol = symbol
         self.warmup_bars = warmup_bars
         self.rolling_window = rolling_window
+        self.diagnostics_callback = diagnostics_callback
+        self.risk_allowed_provider = risk_allowed_provider
         self.transport = UrlLibTopstepTransport()
         self._df: pd.DataFrame | None = None
         self._last_bar_ts: datetime | None = None
@@ -135,7 +139,17 @@ class TopstepLiveFeed:
         self._last_bar_ts = combined["ts_event"].max()
 
         # Run strategy on full enriched window; keep only intents from new bars
-        all_intents = generate_intents(combined, strategy_config)
+        risk_allowed = self.risk_allowed_provider() if self.risk_allowed_provider is not None else None
+        all_intents = generate_intents(
+            combined,
+            strategy_config,
+            diagnostics_callback=self.diagnostics_callback,
+            diagnostic_since=prev_ts,
+            diagnostic_context={
+                "session_allowed": True,
+                "risk_allowed": risk_allowed,
+            },
+        )
         fresh = [i for i in all_intents if i.signal_ts > prev_ts]
         if fresh:
             _log.info("live_feed_signals count=%d new_bar_ts=%s", len(fresh), self._last_bar_ts)

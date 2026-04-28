@@ -28,9 +28,14 @@ from execution.order_manager import OrderManager
 from execution.topstepx_adapter import TopstepXAdapter
 from models.orders import Regime, TradingMode
 from risk.engine import RiskEngine
+from strategy.diagnostics import StrategyDiagnosticsLogger
 from strategy.rules import SignalInput, build_order_intent
 
 _LIVE_BLOCKED_SYMBOLS = frozenset({"6B", "6E"})
+
+
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _lock_name(mode: TradingMode, profile: str | None) -> str:
@@ -109,7 +114,10 @@ def run_once(mode: TradingMode, profile: str | None = None) -> None:
     engine.safe_shutdown()
 
 
-def _build_live_feed(engine: ExecutionEngine) -> TopstepLiveFeed | None:
+def _build_live_feed(
+    engine: ExecutionEngine,
+    diagnostics_logger: StrategyDiagnosticsLogger | None = None,
+) -> TopstepLiveFeed | None:
     """
     Construct a TopstepLiveFeed for PAPER/LIVE modes.
 
@@ -144,6 +152,8 @@ def _build_live_feed(engine: ExecutionEngine) -> TopstepLiveFeed | None:
         token_provider=token_provider,
         contract_id=contract_id,
         symbol=symbol,
+        diagnostics_callback=diagnostics_logger.write if diagnostics_logger is not None else None,
+        risk_allowed_provider=lambda: engine.risk_engine.can_trade(datetime.now(UTC))[0],
     )
     if not feed.initialize():
         logging.getLogger(__name__).warning("live_feed_init_failed no bars returned (market closed?)")
@@ -151,14 +161,28 @@ def _build_live_feed(engine: ExecutionEngine) -> TopstepLiveFeed | None:
     return feed
 
 
-def run_loop(mode: TradingMode, poll_seconds: int, profile: str | None = None) -> None:
+def run_loop(
+    mode: TradingMode,
+    poll_seconds: int,
+    profile: str | None = None,
+    *,
+    diagnostics_enabled: bool = False,
+) -> None:
+    if diagnostics_enabled and mode == TradingMode.LIVE:
+        raise SystemExit("Strategy diagnostics are disabled for live mode; use paper/mock only.")
     engine = build_runtime(mode, profile=profile)
     if not engine.startup():
         raise SystemExit("Startup failed: broker state not clean.")
 
+    diagnostics_logger: StrategyDiagnosticsLogger | None = None
+    if diagnostics_enabled and mode in (TradingMode.MOCK, TradingMode.PAPER):
+        diagnostics_path = Path(engine.config.execution.trade_log_dir) / "strategy_diagnostics.jsonl"
+        diagnostics_logger = StrategyDiagnosticsLogger(diagnostics_path)
+        logging.getLogger(__name__).info("strategy_diagnostics_enabled path=%s", diagnostics_path)
+
     feed: TopstepLiveFeed | None = None
     if mode in (TradingMode.PAPER, TradingMode.LIVE):
-        feed = _build_live_feed(engine)
+        feed = _build_live_feed(engine, diagnostics_logger=diagnostics_logger)
 
     try:
         while True:
@@ -179,6 +203,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--poll-seconds", type=int, default=3)
     parser.add_argument("--profile", choices=available_profiles())
     parser.add_argument("--verbose", action="store_true", help="Enable DEBUG-level logging (shows API wire traffic).")
+    parser.add_argument("--diagnostics", action="store_true", help="Write paper/mock strategy diagnostics JSONL.")
     return parser.parse_args()
 
 
@@ -192,11 +217,14 @@ def main() -> None:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
         datefmt="%Y-%m-%dT%H:%M:%S",
     )
+    diagnostics_enabled = args.diagnostics or _env_flag("STRATEGY_DIAGNOSTICS_ENABLED")
     try:
         if args.once:
+            if diagnostics_enabled and mode == TradingMode.LIVE:
+                raise SystemExit("Strategy diagnostics are disabled for live mode; use paper/mock only.")
             run_once(mode, profile=args.profile)
         else:
-            run_loop(mode, args.poll_seconds, profile=args.profile)
+            run_loop(mode, args.poll_seconds, profile=args.profile, diagnostics_enabled=diagnostics_enabled)
     finally:
         if lock_file is not None:
             lock_file.close()

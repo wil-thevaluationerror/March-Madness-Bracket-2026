@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any, Callable
 from uuid import uuid4
 
 import pandas as pd
@@ -50,11 +51,20 @@ def build_order_intent(signal: SignalInput, config: StrategyConfig) -> OrderInte
     )
 
 
-def generate_intents(df: pd.DataFrame, config: StrategyConfig | None = None) -> list[OrderIntent]:
+def generate_intents(
+    df: pd.DataFrame,
+    config: StrategyConfig | None = None,
+    *,
+    diagnostics_callback: Callable[[dict[str, Any]], None] | None = None,
+    diagnostic_since: datetime | pd.Timestamp | None = None,
+    diagnostic_context: dict[str, Any] | None = None,
+) -> list[OrderIntent]:
     strategy_config = config or StrategyConfig()
     intents: list[OrderIntent] = []
     if df.empty:
         return intents
+    diagnostic_context = diagnostic_context or {}
+    diagnostic_since_ts = pd.Timestamp(diagnostic_since) if diagnostic_since is not None else None
 
     frame = df.copy().sort_values(["symbol", "ts_event"]).reset_index(drop=True)
     if "atr" not in frame.columns:
@@ -96,6 +106,51 @@ def generate_intents(df: pd.DataFrame, config: StrategyConfig | None = None) -> 
     ema_persist_short: dict[str, int] = {}  # symbol → consecutive bars EMA bearish
     ema_persistence_required = int(getattr(strategy_config, "ema_trend_persistence_bars", 0))
 
+    def emit_diagnostic(
+        *,
+        row: object,
+        symbol: str,
+        close_price: float,
+        atr: float | None,
+        adx: float | None,
+        ema_trend_state: str,
+        vwap_condition: str,
+        breakout_condition: str,
+        signal_score: float | None,
+        decision: str,
+        no_trade_reason: str | None,
+    ) -> None:
+        if diagnostics_callback is None:
+            return
+        ts_event = getattr(row, "ts_event", None)
+        if ts_event is None:
+            return
+        bar_ts = pd.Timestamp(ts_event)
+        if diagnostic_since_ts is not None and bar_ts <= diagnostic_since_ts:
+            return
+        try:
+            diagnostics_callback(
+                {
+                    "symbol": symbol,
+                    "bar_timestamp": bar_ts.isoformat(),
+                    "close": close_price,
+                    "session_allowed": diagnostic_context.get("session_allowed", True),
+                    "bars_loaded": len(frame),
+                    "atr": atr,
+                    "adx": adx,
+                    "ema_trend_state": ema_trend_state,
+                    "vwap_condition": vwap_condition,
+                    "breakout_condition": breakout_condition,
+                    "signal_score": signal_score,
+                    "decision": decision,
+                    "no_trade_reason": no_trade_reason,
+                    "risk_allowed": diagnostic_context.get("risk_allowed"),
+                }
+            )
+        except Exception:
+            # Diagnostics must never alter signal generation.
+            return
+
     for index, row in enumerate(frame.itertuples(index=False)):
         symbol = str(getattr(row, "symbol", strategy_config.default_symbol))
         instrument = resolve_instrument(symbol)
@@ -108,21 +163,40 @@ def generate_intents(df: pd.DataFrame, config: StrategyConfig | None = None) -> 
         atr_pct = (atr / atr_median) if atr_median > 0 else 1.0
         breakout_level = float(getattr(row, "breakout_level", close_price) or close_price)
         breakdown_level = float(getattr(row, "breakdown_level", close_price) or close_price)
+        adx_val = float(getattr(row, "adx", 0.0) or 0.0)
 
         # Update EMA persistence counters for this bar (regardless of signal direction).
         if ema_fast > ema_slow:
             ema_persist_long[symbol] = ema_persist_long.get(symbol, 0) + 1
             ema_persist_short[symbol] = 0
+            ema_trend_state = "bullish"
         elif ema_fast < ema_slow:
             ema_persist_short[symbol] = ema_persist_short.get(symbol, 0) + 1
             ema_persist_long[symbol] = 0
+            ema_trend_state = "bearish"
         else:
             ema_persist_long[symbol] = 0
             ema_persist_short[symbol] = 0
+            ema_trend_state = "neutral"
 
         is_long_setup = close_price > vwap and ema_fast > ema_slow and close_price > breakout_level
         is_short_setup = close_price < vwap and ema_fast < ema_slow and close_price < breakdown_level
+        vwap_condition = "above_vwap" if close_price > vwap else "below_vwap" if close_price < vwap else "unknown"
+        breakout_condition = "long_breakout" if close_price > breakout_level else "short_breakout" if close_price < breakdown_level else "none"
         if not is_long_setup and not is_short_setup:
+            emit_diagnostic(
+                row=row,
+                symbol=symbol,
+                close_price=close_price,
+                atr=atr,
+                adx=adx_val,
+                ema_trend_state=ema_trend_state,
+                vwap_condition=vwap_condition,
+                breakout_condition=breakout_condition,
+                signal_score=None,
+                decision="no_trade",
+                no_trade_reason="no_breakout",
+            )
             continue
 
         if is_long_setup:
@@ -145,10 +219,36 @@ def generate_intents(df: pd.DataFrame, config: StrategyConfig | None = None) -> 
         if ema_persistence_required > 0:
             persist_count = ema_persist_long.get(symbol, 0) if is_long_setup else ema_persist_short.get(symbol, 0)
             if persist_count < ema_persistence_required:
+                emit_diagnostic(
+                    row=row,
+                    symbol=symbol,
+                    close_price=close_price,
+                    atr=atr,
+                    adx=adx_val,
+                    ema_trend_state=ema_trend_state,
+                    vwap_condition=vwap_condition,
+                    breakout_condition=breakout_condition,
+                    signal_score=None,
+                    decision="no_trade",
+                    no_trade_reason="ema_persistence",
+                )
                 continue
 
         extension = abs(close_price - trigger_level)
         if extension > float(strategy_config.max_entry_extension_atr) * atr:
+            emit_diagnostic(
+                row=row,
+                symbol=symbol,
+                close_price=close_price,
+                atr=atr,
+                adx=adx_val,
+                ema_trend_state=ema_trend_state,
+                vwap_condition=vwap_condition,
+                breakout_condition=breakout_condition,
+                signal_score=None,
+                decision="no_trade",
+                no_trade_reason="extension_too_high",
+            )
             continue
 
         signal_key = (symbol, side)
@@ -156,8 +256,20 @@ def generate_intents(df: pd.DataFrame, config: StrategyConfig | None = None) -> 
         last_trigger_level = last_trigger_level_by_key.get(signal_key)
 
         # ADX regime filter: skip choppy bars when threshold is set
-        adx_val = float(getattr(row, "adx", 0.0) or 0.0)
         if strategy_config.adx_min_threshold > 0.0 and adx_val < strategy_config.adx_min_threshold:
+            emit_diagnostic(
+                row=row,
+                symbol=symbol,
+                close_price=close_price,
+                atr=atr,
+                adx=adx_val,
+                ema_trend_state=ema_trend_state,
+                vwap_condition=vwap_condition,
+                breakout_condition=breakout_condition,
+                signal_score=None,
+                decision="no_trade",
+                no_trade_reason="adx_below_threshold",
+            )
             continue
 
         # ATR volatility filter: skip anomalously low-ATR bars (ranging/thin market).
@@ -165,6 +277,19 @@ def generate_intents(df: pd.DataFrame, config: StrategyConfig | None = None) -> 
         # where the 2× stop target is unlikely to be reached before reversal or session end.
         atr_min_pct = float(getattr(strategy_config, "atr_min_pct", 0.0))
         if atr_min_pct > 0.0 and atr_pct < atr_min_pct:
+            emit_diagnostic(
+                row=row,
+                symbol=symbol,
+                close_price=close_price,
+                atr=atr,
+                adx=adx_val,
+                ema_trend_state=ema_trend_state,
+                vwap_condition=vwap_condition,
+                breakout_condition=breakout_condition,
+                signal_score=None,
+                decision="no_trade",
+                no_trade_reason="atr_below_threshold",
+            )
             continue
 
         # Use 5-min ATR for stop sizing when configured — reduces stop-outs from 1-min noise
@@ -189,6 +314,19 @@ def generate_intents(df: pd.DataFrame, config: StrategyConfig | None = None) -> 
                 or (side == Side.SELL and trigger_level >= last_trigger_level)
             )
         ):
+            emit_diagnostic(
+                row=row,
+                symbol=symbol,
+                close_price=close_price,
+                atr=atr,
+                adx=adx_val,
+                ema_trend_state=ema_trend_state,
+                vwap_condition=vwap_condition,
+                breakout_condition=breakout_condition,
+                signal_score=None,
+                decision="no_trade",
+                no_trade_reason="reentry_cooldown",
+            )
             continue
 
         trend_strength = max(abs(ema_fast - ema_slow) / atr, 0.0)
@@ -200,6 +338,19 @@ def generate_intents(df: pd.DataFrame, config: StrategyConfig | None = None) -> 
         # Volume confirmation gate: skip low-volume signals when filter is active.
         # volume_strength < filter means volume is below the required fraction of median.
         if strategy_config.volume_entry_filter > 0.0 and volume_strength < strategy_config.volume_entry_filter:
+            emit_diagnostic(
+                row=row,
+                symbol=symbol,
+                close_price=close_price,
+                atr=atr,
+                adx=adx_val,
+                ema_trend_state=ema_trend_state,
+                vwap_condition=vwap_condition,
+                breakout_condition=breakout_condition,
+                signal_score=None,
+                decision="no_trade",
+                no_trade_reason="volume_filter",
+            )
             continue
 
         # Normalize all components to [0, 1] so the weighted score is bounded and
@@ -226,6 +377,19 @@ def generate_intents(df: pd.DataFrame, config: StrategyConfig | None = None) -> 
 
         # Initial entry quality gate: skip weak setups before submitting an intent.
         if strategy_config.min_entry_signal_score > 0.0 and signal_score < strategy_config.min_entry_signal_score:
+            emit_diagnostic(
+                row=row,
+                symbol=symbol,
+                close_price=close_price,
+                atr=atr,
+                adx=adx_val,
+                ema_trend_state=ema_trend_state,
+                vwap_condition=vwap_condition,
+                breakout_condition=breakout_condition,
+                signal_score=signal_score,
+                decision="no_trade",
+                no_trade_reason="signal_score_below_threshold",
+            )
             continue
         ts_event = getattr(row, "ts_event")
         signal = SignalInput(
@@ -267,6 +431,19 @@ def generate_intents(df: pd.DataFrame, config: StrategyConfig | None = None) -> 
                 }
             )
             intents.append(intent)
+            emit_diagnostic(
+                row=row,
+                symbol=symbol,
+                close_price=close_price,
+                atr=atr,
+                adx=adx_val,
+                ema_trend_state=ema_trend_state,
+                vwap_condition=vwap_condition,
+                breakout_condition=breakout_condition,
+                signal_score=signal_score,
+                decision="trade",
+                no_trade_reason=None,
+            )
             last_signal_index_by_key[signal_key] = index
             last_trigger_level_by_key[signal_key] = trigger_level
     return intents
