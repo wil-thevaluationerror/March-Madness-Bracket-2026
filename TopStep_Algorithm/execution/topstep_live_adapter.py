@@ -75,7 +75,10 @@ _SYMBOL_ALIASES = {
     "ENQ": "NQ",
     "MES": "MES",
     "MNQ": "MNQ",
+    "6B": "6B",
+    "6E": "6E",
 }
+_LIVE_BLOCKED_SYMBOLS = frozenset({"6B", "6E"})
 
 
 class TopstepHttpTransport(Protocol):
@@ -358,6 +361,9 @@ class LiveTopstepAdapter:
 
     def place_order(self, order_req: BrokerOrder) -> BrokerOrder:
         self._require_connected()
+        symbol_root = infer_symbol_root(order_req.symbol)
+        if self.mode == TradingMode.LIVE and symbol_root in _LIVE_BLOCKED_SYMBOLS:
+            raise RuntimeError("6B/6E live execution is not verified; use paper/mock only.")
         contract = self._resolve_contract(order_req.symbol)
         payload = {
             "accountId": self._require_account_id(),

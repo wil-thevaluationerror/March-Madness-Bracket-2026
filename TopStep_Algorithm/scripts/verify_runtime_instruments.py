@@ -12,35 +12,26 @@ if str(PROJECT_ROOT) not in sys.path:
 from models.instruments import known_instruments  # noqa: E402
 
 
-CURRENTLY_SUPPORTED = ("ES", "MES", "MNQ", "NQ")
-INTENDED_NOT_IMPLEMENTED = ("6B", "6E")
+REQUIRED_INSTRUMENTS = ("6B", "6E", "NQ", "ES", "MNQ", "MES")
+PAPER_ONLY_INSTRUMENTS = ("6B", "6E")
 
 
 def main() -> int:
     instruments = known_instruments()
     defined = sorted(instruments)
-    missing_supported = [symbol for symbol in CURRENTLY_SUPPORTED if symbol not in instruments]
-    unexpectedly_supported = [symbol for symbol in INTENDED_NOT_IMPLEMENTED if symbol in instruments]
+    missing_required = [symbol for symbol in REQUIRED_INSTRUMENTS if symbol not in instruments]
 
     print(f"runtime_root={PROJECT_ROOT}")
     print(f"defined_instruments={','.join(defined)}")
-    print(f"required_current_instruments={','.join(CURRENTLY_SUPPORTED)}")
+    print(f"required_instruments={','.join(REQUIRED_INSTRUMENTS)}")
 
-    if missing_supported:
-        print(f"ERROR: missing current runtime instruments: {','.join(missing_supported)}", file=sys.stderr)
+    if missing_required:
+        print(f"ERROR: missing required runtime instruments: {','.join(missing_required)}", file=sys.stderr)
         return 1
 
-    if unexpectedly_supported:
-        print(
-            "ERROR: 6B/6E appeared in the registry, but FX execution/backtest support "
-            "has not been verified by this script.",
-            file=sys.stderr,
-        )
-        print(f"unexpected_instruments={','.join(unexpectedly_supported)}", file=sys.stderr)
-        return 1
-
-    print("status=ok_current_runtime_registry")
-    print("6B_6E_status=not_supported_in_active_runtime")
+    print("status=ok_runtime_registry")
+    print(f"paper_only_instruments={','.join(PAPER_ONLY_INSTRUMENTS)}")
+    print("6B_6E_status=paper_enabled_live_blocked")
     return 0
 
 

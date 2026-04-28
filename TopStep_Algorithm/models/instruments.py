@@ -6,7 +6,7 @@ import re
 
 
 _CONTRACT_MONTH_CODES = frozenset("FGHJKMNQUVXZ")
-_ROOT_WITH_CONTRACT_RE = re.compile(r"^(?P<root>[A-Z]+?)(?P<month>[FGHJKMNQUVXZ])(?P<year>\d{1,2})$")
+_ROOT_WITH_CONTRACT_RE = re.compile(r"^(?P<root>\d?[A-Z]+?)(?P<month>[FGHJKMNQUVXZ])(?P<year>\d{1,2})$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +56,18 @@ _INSTRUMENT_SPECS: dict[str, InstrumentSpec] = {
         description="E-mini Nasdaq-100",
         tick_size=0.25,
         tick_value=5.0,
+    ),
+    "6B": InstrumentSpec(
+        root_symbol="6B",
+        description="British Pound futures",
+        tick_size=0.0001,
+        tick_value=6.25,
+    ),
+    "6E": InstrumentSpec(
+        root_symbol="6E",
+        description="Euro FX futures",
+        tick_size=0.00005,
+        tick_value=6.25,
     ),
 }
 

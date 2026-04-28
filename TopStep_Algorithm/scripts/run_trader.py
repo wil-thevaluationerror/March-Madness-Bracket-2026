@@ -30,6 +30,8 @@ from models.orders import Regime, TradingMode
 from risk.engine import RiskEngine
 from strategy.rules import SignalInput, build_order_intent
 
+_LIVE_BLOCKED_SYMBOLS = frozenset({"6B", "6E"})
+
 
 def _lock_name(mode: TradingMode, profile: str | None) -> str:
     profile_name = profile or "default"
@@ -70,6 +72,9 @@ def _inject_credentials_from_env(config) -> None:
 def build_runtime(mode: TradingMode, profile: str | None = None) -> ExecutionEngine:
     config = build_config(profile)
     config.execution.mode = mode
+    selected_symbol = config.strategy.preferred_symbol or config.strategy.default_symbol
+    if mode == TradingMode.LIVE and selected_symbol in _LIVE_BLOCKED_SYMBOLS:
+        raise SystemExit("6B/6E live execution is not verified; use paper/mock only.")
     _inject_credentials_from_env(config)
     risk_engine = RiskEngine(config.risk)
     adapter = TopstepXAdapter(mode=mode, config=config.execution.topstep)

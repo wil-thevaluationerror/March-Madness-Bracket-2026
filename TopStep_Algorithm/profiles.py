@@ -7,10 +7,17 @@ from backtest.holidays import us_futures_skip_dates
 
 PROFILE_TOPSTEP_50K_EXPRESS = "topstep-50k-express"
 PROFILE_TOPSTEP_50K_EXPRESS_LONDON = "topstep-50k-express-london"
+PROFILE_TOPSTEP_50K_EXPRESS_LONDON_6B_PAPER = "topstep-50k-express-london-6b-paper"
+PROFILE_TOPSTEP_50K_EXPRESS_LONDON_6E_PAPER = "topstep-50k-express-london-6e-paper"
 
 
 def available_profiles() -> tuple[str, ...]:
-    return (PROFILE_TOPSTEP_50K_EXPRESS, PROFILE_TOPSTEP_50K_EXPRESS_LONDON)
+    return (
+        PROFILE_TOPSTEP_50K_EXPRESS,
+        PROFILE_TOPSTEP_50K_EXPRESS_LONDON,
+        PROFILE_TOPSTEP_50K_EXPRESS_LONDON_6B_PAPER,
+        PROFILE_TOPSTEP_50K_EXPRESS_LONDON_6E_PAPER,
+    )
 
 
 def _apply_topstep_50k_express_base(config: TraderConfig) -> TraderConfig:
@@ -154,6 +161,18 @@ def apply_profile(config: TraderConfig, profile: str | None) -> TraderConfig:
             exchange_close=time(hour=2, minute=0),
         ),
     )
+    if profile == PROFILE_TOPSTEP_50K_EXPRESS_LONDON_6B_PAPER:
+        config.strategy.preferred_symbol = "6B"
+        config.strategy.instrument_root_symbol = "6B"
+        config.strategy.base_qty = 1
+        config.risk.max_position_size = 1
+        config.execution.commission_per_lot = 0.0
+    elif profile == PROFILE_TOPSTEP_50K_EXPRESS_LONDON_6E_PAPER:
+        config.strategy.preferred_symbol = "6E"
+        config.strategy.instrument_root_symbol = "6E"
+        config.strategy.base_qty = 1
+        config.risk.max_position_size = 1
+        config.execution.commission_per_lot = 0.0
     return config
 
 

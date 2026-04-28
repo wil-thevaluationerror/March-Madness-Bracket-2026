@@ -9,7 +9,14 @@ from pathlib import Path
 
 import pandas as pd
 
-from config import PROFILE_TOPSTEP_50K_EXPRESS, PROFILE_TOPSTEP_50K_EXPRESS_LONDON, TraderConfig, build_config
+from config import (
+    PROFILE_TOPSTEP_50K_EXPRESS,
+    PROFILE_TOPSTEP_50K_EXPRESS_LONDON,
+    PROFILE_TOPSTEP_50K_EXPRESS_LONDON_6B_PAPER,
+    PROFILE_TOPSTEP_50K_EXPRESS_LONDON_6E_PAPER,
+    TraderConfig,
+    build_config,
+)
 from backtest.dashboard import build_dashboard_payload
 from backtest.engine import BacktestResult, SimulatedBacktestEngine
 from data_pipeline.preprocess import preprocess, select_primary_symbol
@@ -20,6 +27,7 @@ from execution.scheduler import SessionScheduler
 from execution.topstep_live_adapter import TopstepHttpTransport, TopstepRealtimeClient
 from execution.topstepx_adapter import TopstepXAdapter
 from features.indicators import add_atr, add_ema, add_vwap
+from models.instruments import infer_symbol_root, known_instruments
 from models.orders import BrokerOrder, OrderState, OrderType, PositionSnapshot, Regime, Side, TimeInForce, TradingMode
 from risk.engine import RiskEngine
 from strategy.rules import SignalInput, build_order_intent, generate_intents
@@ -44,6 +52,22 @@ class FakeTopstepTransport(TopstepHttpTransport):
                 "description": "Micro E-mini S&P 500: June 2025",
                 "tickSize": 0.25,
                 "tickValue": 1.25,
+                "activeContract": True,
+            },
+            "CON.F.US.6B.M25": {
+                "id": "CON.F.US.6B.M25",
+                "name": "6BM25",
+                "description": "British Pound futures: June 2025",
+                "tickSize": 0.0001,
+                "tickValue": 6.25,
+                "activeContract": True,
+            },
+            "CON.F.US.6E.M25": {
+                "id": "CON.F.US.6E.M25",
+                "name": "6EM25",
+                "description": "Euro FX futures: June 2025",
+                "tickSize": 0.00005,
+                "tickValue": 6.25,
                 "activeContract": True,
             }
         }
@@ -659,6 +683,33 @@ class ExecutionEngineTestCase(unittest.TestCase):
         self.assertEqual(config.execution.topstep.api_base_url, "https://api.topstepx.com")
         self.assertEqual(config.execution.topstep.missing_required_fields(), ("username", "api_key", "account_id"))
 
+    def test_instrument_registry_includes_fx_and_index_contracts(self) -> None:
+        instruments = known_instruments()
+        for symbol in ("6B", "6E", "ES", "MES", "MNQ", "NQ"):
+            self.assertIn(symbol, instruments)
+            self.assertGreater(instruments[symbol].tick_size, 0)
+            self.assertGreater(instruments[symbol].tick_value, 0)
+
+        self.assertEqual(instruments["6B"].tick_size, 0.0001)
+        self.assertEqual(instruments["6B"].tick_value, 6.25)
+        self.assertEqual(instruments["6E"].tick_size, 0.00005)
+        self.assertEqual(instruments["6E"].tick_value, 6.25)
+
+    def test_infer_symbol_root_handles_digit_prefixed_futures(self) -> None:
+        cases = {
+            "6BM25": "6B",
+            "6BU26": "6B",
+            "6EM25": "6E",
+            "6EU26": "6E",
+            "ESM25": "ES",
+            "MESU26": "MES",
+            "MNQM25": "MNQ",
+            "NQU26": "NQ",
+        }
+        for raw_symbol, expected_root in cases.items():
+            with self.subTest(raw_symbol=raw_symbol):
+                self.assertEqual(infer_symbol_root(raw_symbol), expected_root)
+
     def test_live_topstep_adapter_requires_connection_config(self) -> None:
         adapter = TopstepXAdapter(mode=TradingMode.LIVE)
         with self.assertRaisesRegex(RuntimeError, "topstep_config_incomplete"):
@@ -729,6 +780,76 @@ class ExecutionEngineTestCase(unittest.TestCase):
 
         canceled = adapter.cancel_order("entry-live-1")
         self.assertEqual(canceled.order_id, "entry-live-1")
+
+    def test_live_topstep_adapter_normalizes_fx_contract_roots(self) -> None:
+        config = TraderConfig()
+        config.execution.topstep.username = "demo-user"
+        config.execution.topstep.api_key = "demo-key"
+        config.execution.topstep.account_id = "acct-123"
+        adapter = TopstepXAdapter(
+            mode=TradingMode.LIVE,
+            config=config.execution.topstep,
+            transport=FakeTopstepTransport(),
+            realtime_client=FakeRealtimeClient(),
+        )
+
+        self.assertEqual(adapter._impl._normalize_symbol_root({"id": "CON.F.US.6B.M25", "name": "6BM25"}), "6B")
+        self.assertEqual(adapter._impl._normalize_symbol_root({"id": "CON.F.US.6E.M25", "name": "6EM25"}), "6E")
+
+    def test_live_topstep_adapter_blocks_unverified_fx_live_orders(self) -> None:
+        config = TraderConfig()
+        config.execution.topstep.username = "demo-user"
+        config.execution.topstep.api_key = "demo-key"
+        config.execution.topstep.account_id = "acct-123"
+        adapter = TopstepXAdapter(
+            mode=TradingMode.LIVE,
+            config=config.execution.topstep,
+            transport=FakeTopstepTransport(),
+            realtime_client=FakeRealtimeClient(),
+        )
+        adapter.connect()
+
+        order = BrokerOrder(
+            order_id="entry-live-6b",
+            symbol="6B",
+            side=Side.BUY,
+            qty=1,
+            order_type=OrderType.MARKET,
+            tif=TimeInForce.DAY,
+            state=OrderState.PENDING,
+            role="entry",
+        )
+        with self.assertRaisesRegex(RuntimeError, "6B/6E live execution is not verified"):
+            adapter.place_order(order)
+
+    def test_paper_topstep_adapter_allows_fx_orders(self) -> None:
+        config = TraderConfig()
+        config.execution.topstep.username = "demo-user"
+        config.execution.topstep.api_key = "demo-key"
+        config.execution.topstep.account_id = "acct-123"
+        transport = FakeTopstepTransport()
+        adapter = TopstepXAdapter(
+            mode=TradingMode.PAPER,
+            config=config.execution.topstep,
+            transport=transport,
+            realtime_client=FakeRealtimeClient(),
+        )
+        adapter.connect()
+
+        submitted = adapter.place_order(
+            BrokerOrder(
+                order_id="entry-paper-6b",
+                symbol="6B",
+                side=Side.BUY,
+                qty=1,
+                order_type=OrderType.MARKET,
+                tif=TimeInForce.DAY,
+                state=OrderState.PENDING,
+                role="entry",
+            )
+        )
+        self.assertEqual(submitted.broker_order_id, "9001")
+        self.assertEqual(transport.place_payloads[-1]["contractId"], "CON.F.US.6B.M25")
 
     def test_live_topstep_adapter_does_not_emit_reports_for_historical_orders_on_startup(self) -> None:
         config = TraderConfig()
@@ -1286,6 +1407,28 @@ class ExecutionEngineTestCase(unittest.TestCase):
         self.assertEqual(london_window.no_new_trades_after, time(1, 35))
         self.assertEqual(london_window.force_flatten_at, time(1, 58))
         self.assertEqual(london_window.exchange_close, time(2, 0))
+
+    def test_topstep_fx_london_profiles_are_paper_sized_and_single_symbol(self) -> None:
+        config_6b = build_config(PROFILE_TOPSTEP_50K_EXPRESS_LONDON_6B_PAPER)
+        config_6e = build_config(PROFILE_TOPSTEP_50K_EXPRESS_LONDON_6E_PAPER)
+
+        self.assertEqual(config_6b.strategy.preferred_symbol, "6B")
+        self.assertEqual(config_6b.strategy.instrument_root_symbol, "6B")
+        self.assertEqual(config_6b.strategy.base_qty, 1)
+        self.assertEqual(config_6b.risk.max_position_size, 1)
+
+        self.assertEqual(config_6e.strategy.preferred_symbol, "6E")
+        self.assertEqual(config_6e.strategy.instrument_root_symbol, "6E")
+        self.assertEqual(config_6e.strategy.base_qty, 1)
+        self.assertEqual(config_6e.risk.max_position_size, 1)
+
+    def test_run_trader_blocks_fx_live_runtime_before_startup(self) -> None:
+        from scripts.run_trader import build_runtime
+
+        with self.assertRaisesRegex(SystemExit, "6B/6E live execution is not verified"):
+            build_runtime(TradingMode.LIVE, profile=PROFILE_TOPSTEP_50K_EXPRESS_LONDON_6B_PAPER)
+        engine = build_runtime(TradingMode.PAPER, profile=PROFILE_TOPSTEP_50K_EXPRESS_LONDON_6B_PAPER)
+        self.assertEqual(engine.config.strategy.preferred_symbol, "6B")
 
     def test_scheduler_blocks_trading_on_holiday(self) -> None:
         """SessionScheduler.is_trading_session() must return False on skip_dates."""
