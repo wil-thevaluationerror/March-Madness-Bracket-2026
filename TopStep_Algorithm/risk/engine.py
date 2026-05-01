@@ -313,14 +313,23 @@ class RiskEngine:
             },
         }
 
-    def restore_state(self, snapshot: dict[str, object]) -> None:
+    def restore_state(self, snapshot: dict[str, object], *, now: datetime | None = None) -> None:
         def parse_dt(value: object) -> datetime | None:
             if isinstance(value, str) and value:
                 return datetime.fromisoformat(value)
             return None
 
-        self.state.daily_realized_pnl = float(snapshot.get("daily_realized_pnl", 0.0))
-        self.state.equity_peak = float(snapshot.get("equity_peak", max(self.state.daily_realized_pnl, 0.0)))
+        # Detect a new trading day: if the last recorded exit is from a prior
+        # calendar date, the daily loss counter belongs to a previous session and
+        # must not carry over.  last_exit_at is the most reliable timestamp because
+        # it is written on every trade close; fall back to last_entry_at if absent.
+        reference_ts_raw = snapshot.get("last_exit_at") or snapshot.get("last_entry_at")
+        reference_ts = parse_dt(reference_ts_raw)
+        today = (now or datetime.now()).date()
+        is_new_day = reference_ts is not None and reference_ts.date() < today
+
+        self.state.daily_realized_pnl = 0.0 if is_new_day else float(snapshot.get("daily_realized_pnl", 0.0))
+        self.state.equity_peak = 0.0 if is_new_day else float(snapshot.get("equity_peak", max(self.state.daily_realized_pnl, 0.0)))
         self.state.trade_count = int(snapshot.get("trade_count", 0))
         self.state.completed_trade_count = int(snapshot.get("completed_trade_count", 0))
         self.state.consecutive_losses = int(snapshot.get("consecutive_losses", 0))

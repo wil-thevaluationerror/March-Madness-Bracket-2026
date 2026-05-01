@@ -346,6 +346,30 @@ class ExecutionEngineTestCase(unittest.TestCase):
         self.assertTrue(self.engine.risk_engine.position_for("MES").is_flat)
         self.assertTrue(self.engine.risk_engine.state.kill_switch.armed)
 
+    def test_flatten_all_submits_exit_for_broker_only_position(self) -> None:
+        self.adapter.positions["MES"] = PositionSnapshot(symbol="MES", qty=8, avg_price=5200.0)
+
+        self.engine.flatten_all("manual", now=self.now)
+
+        flatten_orders = [order for order in self.adapter.orders.values() if order.role == "flatten"]
+        self.assertEqual(len(flatten_orders), 1)
+        self.assertEqual(flatten_orders[0].side, Side.SELL)
+        self.assertEqual(flatten_orders[0].qty, 8)
+        self.assertTrue(self.engine.risk_engine.state.kill_switch.armed)
+        self.assertEqual(self.engine.risk_engine.state.kill_switch.reason, "broker_position_mismatch_on_exit")
+
+    def test_heartbeat_flattens_broker_only_position_on_reconciliation_mismatch(self) -> None:
+        self.adapter.positions["MES"] = PositionSnapshot(symbol="MES", qty=-8, avg_price=5200.0)
+
+        self.engine.heartbeat(now=self.now)
+
+        flatten_orders = [order for order in self.adapter.orders.values() if order.role == "flatten"]
+        self.assertEqual(len(flatten_orders), 1)
+        self.assertEqual(flatten_orders[0].side, Side.BUY)
+        self.assertEqual(flatten_orders[0].qty, 8)
+        self.assertTrue(self.engine.risk_engine.state.kill_switch.armed)
+        self.assertEqual(self.engine.risk_engine.state.kill_switch.reason, "reconciliation_mismatch")
+
     def test_missing_broker_stop_coverage_triggers_flatten(self) -> None:
         intent = self._intent()
         assert intent is not None
@@ -1391,7 +1415,7 @@ class ExecutionEngineTestCase(unittest.TestCase):
         # Christmas Day 2025 must be excluded.
         self.assertIn(date(2025, 12, 25), config.session.skip_dates)
 
-    def test_topstep_50k_express_london_profile_uses_asia_pre_london_window(self) -> None:
+    def test_topstep_50k_express_london_profile_uses_london_utc_window(self) -> None:
         config = build_config(PROFILE_TOPSTEP_50K_EXPRESS_LONDON)
 
         self.assertEqual(config.strategy.base_qty, 8)
@@ -1399,14 +1423,17 @@ class ExecutionEngineTestCase(unittest.TestCase):
         self.assertEqual(config.risk.internal_daily_loss_limit, 600.0)
         self.assertEqual(config.strategy.atr_min_pct, 0.85)
         self.assertEqual(len(config.session.session_windows), 1)
+        # London profiles use UTC so the scheduler window matches the signal engine's
+        # London session detection (08:30–13:30 UTC) regardless of DST.
+        self.assertEqual(config.session.timezone, "UTC")
 
         london_window = config.session.session_windows[0]
-        self.assertEqual(london_window.label, "asia_pre_london")
+        self.assertEqual(london_window.label, "london")
         from datetime import time
-        self.assertEqual(london_window.market_open, time(17, 0))
-        self.assertEqual(london_window.no_new_trades_after, time(1, 35))
-        self.assertEqual(london_window.force_flatten_at, time(1, 58))
-        self.assertEqual(london_window.exchange_close, time(2, 0))
+        self.assertEqual(london_window.market_open, time(8, 30))
+        self.assertEqual(london_window.no_new_trades_after, time(13, 0))
+        self.assertEqual(london_window.force_flatten_at, time(13, 25))
+        self.assertEqual(london_window.exchange_close, time(13, 30))
 
     def test_topstep_fx_london_profiles_are_paper_sized_and_single_symbol(self) -> None:
         config_6b = build_config(PROFILE_TOPSTEP_50K_EXPRESS_LONDON_6B_PAPER)

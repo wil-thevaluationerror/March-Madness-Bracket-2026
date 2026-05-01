@@ -1,10 +1,12 @@
 # Data files
+data/
 data/*.dbn.zst
 data/*.dbn
 data/*.zst
 
 # Backtest output (large)
 output/
+results/
 
 # Runtime & state
 runtime_logs/

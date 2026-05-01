@@ -4,14 +4,46 @@ import pandas as pd
 
 
 def add_vwap(df: pd.DataFrame) -> pd.DataFrame:
+    """Compute session VWAP anchored to 09:30 CT (NY equities/futures open).
+
+    The VWAP accumulation resets at 09:30 CT each day, not at midnight.
+    Anchoring at midnight incorrectly folds 8-9 hours of overnight/pre-market
+    price action into the session VWAP, making it a poor proxy for the
+    intra-session fair-value level that institutional participants reference.
+
+    Bars before 09:30 CT belong to the previous session's VWAP bucket.
+    If the input timestamps are timezone-aware, they are converted to CT for
+    the boundary calculation; otherwise they are treated as already CT.
+    """
     frame = df.copy()
     frame = frame.sort_values(["symbol", "ts_event"]).reset_index(drop=True)
-    frame["session_date"] = frame["ts_event"].dt.date
+
+    # Compute the 09:30 CT session boundary for each bar.
+    ts = frame["ts_event"]
+    if hasattr(ts.dt, "tz") and ts.dt.tz is not None:
+        ts_ct = ts.dt.tz_convert("America/Chicago")
+    else:
+        ts_ct = ts  # assume already CT
+
+    midnight_ct = ts_ct.dt.normalize()
+    open_ct = midnight_ct + pd.Timedelta(hours=9, minutes=30)
+    # Bars before 09:30 CT belong to the previous day's session bucket.
+    frame["_session_key"] = open_ct.where(ts_ct >= open_ct, open_ct - pd.Timedelta(days=1))
+
     typical_price = (frame["high"] + frame["low"] + frame["close"]) / 3.0
-    cumulative_value = (typical_price * frame["volume"]).groupby([frame["symbol"], frame["session_date"]]).cumsum()
-    cumulative_volume = frame["volume"].groupby([frame["symbol"], frame["session_date"]]).cumsum().replace(0, pd.NA)
+    cumulative_value = (
+        (typical_price * frame["volume"])
+        .groupby([frame["symbol"], frame["_session_key"]])
+        .cumsum()
+    )
+    cumulative_volume = (
+        frame["volume"]
+        .groupby([frame["symbol"], frame["_session_key"]])
+        .cumsum()
+        .replace(0, pd.NA)
+    )
     frame["vwap"] = cumulative_value / cumulative_volume
-    return frame
+    return frame.drop(columns=["_session_key"])
 
 
 def add_ema(df: pd.DataFrame, fast_span: int = 20, slow_span: int = 50) -> pd.DataFrame:

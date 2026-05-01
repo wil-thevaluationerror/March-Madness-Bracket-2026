@@ -199,6 +199,29 @@ def generate_intents(
             )
             continue
 
+        # Fix D: ATR elevation filter — suppress signals when the current ATR
+        # exceeds 2× the 50-bar median ATR.  Breakouts fired during anomalously
+        # high-volatility bars have a materially higher failure rate: the stop
+        # distance is outsized (worsening R:R), and the breakout is often the
+        # exhaust move of a volatility spike rather than a trend initiation.
+        # The previous threshold (3×) only caught the most extreme outliers;
+        # today's Trade 1 fired at 2.33× and was immediately stopped out.
+        if atr_median > 0 and atr > 2.0 * atr_median:
+            emit_diagnostic(
+                row=row,
+                symbol=symbol,
+                close_price=close_price,
+                atr=atr,
+                adx=adx_val,
+                ema_trend_state=ema_trend_state,
+                vwap_condition=vwap_condition,
+                breakout_condition=breakout_condition,
+                signal_score=None,
+                decision="no_trade",
+                no_trade_reason="atr_elevated",
+            )
+            continue
+
         if is_long_setup:
             side = Side.BUY
             trigger_level = breakout_level

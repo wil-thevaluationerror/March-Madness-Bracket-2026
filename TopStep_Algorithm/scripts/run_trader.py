@@ -22,14 +22,22 @@ except ImportError:
 
 from config import available_profiles, build_config
 from data_pipeline.live_feed import TopstepLiveFeed
+from data_pipeline.sweep_live_feed import SweepLiveFeed
 from execution.engine import ExecutionEngine
 from execution.logging import EventLogger
 from execution.order_manager import OrderManager
 from execution.topstepx_adapter import TopstepXAdapter
 from models.orders import Regime, TradingMode
+from profiles import PROFILE_TOPSTEP_50K_EXPRESS_LONDON_6B_PAPER, PROFILE_TOPSTEP_50K_EXPRESS_LONDON_6E_PAPER
 from risk.engine import RiskEngine
 from strategy.diagnostics import StrategyDiagnosticsLogger
 from strategy.rules import SignalInput, build_order_intent
+
+# Profiles that use the London-sweep SignalEngine instead of the VWAP/EMA rules engine
+_LONDON_SWEEP_PROFILES = frozenset({
+    PROFILE_TOPSTEP_50K_EXPRESS_LONDON_6B_PAPER,
+    PROFILE_TOPSTEP_50K_EXPRESS_LONDON_6E_PAPER,
+})
 
 _LIVE_BLOCKED_SYMBOLS = frozenset({"6B", "6E"})
 
@@ -81,6 +89,14 @@ def build_runtime(mode: TradingMode, profile: str | None = None) -> ExecutionEng
     if mode == TradingMode.LIVE and selected_symbol in _LIVE_BLOCKED_SYMBOLS:
         raise SystemExit("6B/6E live execution is not verified; use paper/mock only.")
     _inject_credentials_from_env(config)
+    if mode in (TradingMode.PAPER, TradingMode.LIVE):
+        missing = config.execution.topstep.missing_required_fields()
+        if missing:
+            raise SystemExit(
+                f"Missing required credentials for {mode.value} mode: "
+                + ", ".join(missing)
+                + ". Set TOPSTEP_USERNAME, TOPSTEP_API_KEY, TOPSTEP_ACCOUNT_ID env vars."
+            )
     risk_engine = RiskEngine(config.risk)
     adapter = TopstepXAdapter(mode=mode, config=config.execution.topstep)
     order_manager = OrderManager()
@@ -161,6 +177,48 @@ def _build_live_feed(
     return feed
 
 
+def _build_sweep_feed(engine: ExecutionEngine) -> SweepLiveFeed | None:
+    """Construct a SweepLiveFeed for London-sweep profiles (paper/live modes).
+
+    Reuses the same contract and token infrastructure as ``_build_live_feed``
+    but drives the London-sweep ``SignalEngine`` instead of the VWAP rules.
+    """
+    from execution.topstep_live_adapter import LiveTopstepAdapter
+
+    adapter = engine.adapter
+    inner = getattr(adapter, "_impl", None)
+    if not isinstance(inner, LiveTopstepAdapter):
+        return None
+
+    symbol = engine.config.strategy.preferred_symbol or engine.config.strategy.default_symbol
+    contract = inner.contract_cache_by_symbol.get(symbol)
+    if contract is None:
+        try:
+            contract = inner._resolve_contract(symbol)
+        except RuntimeError:
+            logging.getLogger(__name__).warning(
+                "sweep_feed_contract_not_found symbol=%s", symbol
+            )
+            return None
+
+    contract_id = str(contract["id"])
+    token_provider = lambda: inner.access_token  # noqa: E731
+
+    feed = SweepLiveFeed(
+        config=inner.config,
+        token_provider=token_provider,
+        contract_id=contract_id,
+        symbol=symbol,
+        strategy_config=engine.config.strategy,
+        base_qty=engine.config.strategy.base_qty,
+    )
+    if not feed.initialize():
+        logging.getLogger(__name__).warning(
+            "sweep_feed_init_failed no bars returned (market closed?)"
+        )
+    return feed
+
+
 def _log_runtime_config(engine: ExecutionEngine, mode: TradingMode, profile: str | None) -> None:
     log = logging.getLogger(__name__)
     cfg = engine.config
@@ -204,14 +262,22 @@ def run_loop(
         diagnostics_logger = StrategyDiagnosticsLogger(diagnostics_path)
         logging.getLogger(__name__).info("strategy_diagnostics_enabled path=%s", diagnostics_path)
 
-    feed: TopstepLiveFeed | None = None
+    sweep_feed: SweepLiveFeed | None = None
+    vwap_feed: TopstepLiveFeed | None = None
     if mode in (TradingMode.PAPER, TradingMode.LIVE):
-        feed = _build_live_feed(engine, diagnostics_logger=diagnostics_logger)
+        if profile in _LONDON_SWEEP_PROFILES:
+            sweep_feed = _build_sweep_feed(engine)
+        else:
+            vwap_feed = _build_live_feed(engine, diagnostics_logger=diagnostics_logger)
 
     try:
         while True:
-            if feed is not None:
-                intents = feed.tick(engine.config.strategy)
+            if sweep_feed is not None:
+                intents = sweep_feed.tick()
+                for intent in intents:
+                    engine.submit_intent(intent)
+            elif vwap_feed is not None:
+                intents = vwap_feed.tick(engine.config.strategy)
                 for intent in intents:
                     engine.submit_intent(intent)
             engine.heartbeat()

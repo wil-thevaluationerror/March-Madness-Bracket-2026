@@ -150,15 +150,22 @@ def apply_profile(config: TraderConfig, profile: str | None) -> TraderConfig:
         )
         return config
 
-    # Asia/pre-London variant: use the same Topstep risk model but trade only the
-    # evening-to-pre-London window from the default session schedule.
+    # OB-only signals have 17.6% WR in OOS data (-$2,206 total across 17 trades).
+    # Restrict to FVG and OB+FVG which are both profitable clusters.
+    config.strategy.allowed_confluence_types = frozenset({"FVG", "OB+FVG"})
+
+    # London session variant: trade the London liquidity-sweep window (08:30–13:30 UTC).
+    # All times are expressed in UTC so the scheduler works correctly regardless of DST.
+    # New entries stop at 13:00 UTC (30-min wind-down before the NY open overlap thins
+    # London flow); positions stay open until stop/target or the 13:25 UTC force-flatten.
+    config.session.timezone = "UTC"
     config.session.session_windows = (
         SessionWindow(
-            label="asia_pre_london",
-            market_open=time(hour=17, minute=0),
-            no_new_trades_after=time(hour=1, minute=35),
-            force_flatten_at=time(hour=1, minute=58),
-            exchange_close=time(hour=2, minute=0),
+            label="london",
+            market_open=time(hour=8, minute=30),
+            no_new_trades_after=time(hour=13, minute=0),
+            force_flatten_at=time(hour=13, minute=25),
+            exchange_close=time(hour=13, minute=30),
         ),
     )
     if profile == PROFILE_TOPSTEP_50K_EXPRESS_LONDON_6B_PAPER:

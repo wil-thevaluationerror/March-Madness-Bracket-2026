@@ -79,6 +79,14 @@ _SYMBOL_ALIASES = {
     "6E": "6E",
 }
 _LIVE_BLOCKED_SYMBOLS = frozenset({"6B", "6E"})
+_ROLE_PREFIXES = ("flatten", "stop", "target")
+
+
+def _infer_role_from_order_id(order_id: str) -> str:
+    for prefix in _ROLE_PREFIXES:
+        if order_id.startswith(f"{prefix}-"):
+            return prefix
+    return "entry"
 
 
 class TopstepHttpTransport(Protocol):
@@ -784,7 +792,7 @@ class LiveTopstepAdapter:
             filled_qty=filled_qty,
             avg_fill_price=float(item["filledPrice"]) if item.get("filledPrice") is not None else None,
             parent_order_id=previous.parent_order_id if previous else None,
-            role=previous.role if previous else "entry",
+            role=previous.role if previous else _infer_role_from_order_id(order_id),
             broker_order_id=remote_order_id,
             submitted_at=self._parse_timestamp(item.get("creationTimestamp")),
             updated_at=self._parse_timestamp(item.get("updateTimestamp")) or self._now(),

@@ -79,7 +79,7 @@ class ExecutionEngine:
     def startup(self, *, now: datetime | None = None) -> bool:
         now = self._coerce_time(now or self._now())
         if self.mode != "backtest":
-            self._restore_state()
+            self._restore_state(now)
             self._cleanup_processed_intents(now, persist=False)
         self.adapter.connect()
         if not self._ensure_connection(now):
@@ -119,6 +119,16 @@ class ExecutionEngine:
         self.drain_adapter_events()
         reconcile_result = self.reconciler.reconcile_all(now)
         self.logger.log_event("reconciliation_result", result=reconcile_result)
+        if not reconcile_result.positions_match:
+            broker_positions = self._broker_positions_for_exit()
+            if broker_positions:
+                self.logger.log_event(
+                    "broker_position_mismatch_flatten",
+                    reason="reconciliation_mismatch",
+                    positions=broker_positions,
+                )
+                self.flatten_all("reconciliation_mismatch", now=now)
+                self.drain_adapter_events()
         for order in self.order_manager.cancel_stale_orders(now, self.config.execution.stale_order_seconds):
             if order.role == "entry":
                 self._cancel_order(order.order_id)
@@ -274,7 +284,8 @@ class ExecutionEngine:
         internal_position = self.risk_engine.position_for(symbol)
         if position.is_flat:
             if not internal_position.is_flat:
-                self.risk_engine.arm_kill_switch("broker_position_mismatch_on_exit", now)
+                if not self.risk_engine.state.kill_switch.armed:
+                    self.risk_engine.arm_kill_switch("broker_position_mismatch_on_exit", now)
                 self.logger.log_event(
                     "broker_position_mismatch_on_exit",
                     symbol=symbol,
@@ -285,7 +296,8 @@ class ExecutionEngine:
                 self._sync_internal_flat_position(symbol, now)
             return
         if internal_position.qty != position.qty:
-            self.risk_engine.arm_kill_switch("broker_position_mismatch_on_exit", now)
+            if not self.risk_engine.state.kill_switch.armed:
+                self.risk_engine.arm_kill_switch("broker_position_mismatch_on_exit", now)
             self.logger.log_event(
                 "broker_position_mismatch_on_exit",
                 symbol=symbol,
@@ -320,8 +332,29 @@ class ExecutionEngine:
     def flatten_all(self, reason: str, now: datetime | None = None) -> None:
         now = self._coerce_time(now or self._now())
         if self.flatten_in_progress and not self._flatten_complete():
-            self.logger.log_event("flatten_skipped", reason=reason, detail="flatten_in_progress")
-            return
+            # Fix B: detect the deadlock where a prior flatten attempt silently
+            # failed.  Signature: internal position is flat AND no active flatten
+            # order exists, yet the broker still reports an open position.  In
+            # this state _flatten_complete() will never return True so every
+            # subsequent flatten_all() call is a permanent no-op.  Reset the flag
+            # and fall through to issue a fresh market flatten order.
+            any_internal = any(
+                not p.is_flat for p in self.risk_engine.state.positions.values()
+            )
+            any_flatten_order = any(
+                o.role == "flatten" for o in self.order_manager.active_orders()
+            )
+            if not any_internal and not any_flatten_order:
+                self.logger.log_event(
+                    "flatten_in_progress_reset",
+                    reason="prior_flatten_failed_silently",
+                    trigger=reason,
+                )
+                self.flatten_in_progress = False
+                # fall through to issue a fresh flatten
+            else:
+                self.logger.log_event("flatten_skipped", reason=reason, detail="flatten_in_progress")
+                return
         self.flatten_in_progress = True
         self.logger.log_event("flatten_attempt", reason=reason)
         if not self._ensure_connection(now):
@@ -331,9 +364,14 @@ class ExecutionEngine:
         for order in list(self.order_manager.active_orders()):
             if order.role != "flatten":
                 self._cancel_order(order.order_id)
-        for symbol, position in list(self.risk_engine.state.positions.items()):
-            if not position.is_flat:
-                self.handle_exit_signal(symbol, reason=reason, now=now)
+        exit_symbols = {
+            symbol
+            for symbol, position in self.risk_engine.state.positions.items()
+            if not position.is_flat
+        }
+        exit_symbols.update(self._broker_positions_for_exit())
+        for symbol in sorted(exit_symbols):
+            self.handle_exit_signal(symbol, reason=reason, now=now)
         self.logger.log_event("flatten_requested", reason=reason)
         self._persist_state()
 
@@ -394,6 +432,25 @@ class ExecutionEngine:
             raise RuntimeError("entry_rejected")
         self.order_manager.on_order_update(submitted_entry, now)
         self.logger.log_event("entry_submitted", intent=intent, entry=submitted_entry)
+        # Fix A: market orders are often returned by the adapter as immediately
+        # FILLED (synchronous fill).  In that case the poll loop will not emit a
+        # second fill event, so on_fill() — which registers the position and
+        # submits child stop/target orders — would never be called.  Synthesise
+        # the fill report here and call handle_execution_report() immediately.
+        if submitted_entry.state == OrderState.FILLED and (submitted_entry.filled_qty or 0) > 0:
+            pre_fill_report = ExecutionReport(
+                order_id=submitted_entry.order_id,
+                broker_order_id=submitted_entry.broker_order_id,
+                symbol=submitted_entry.symbol,
+                status=OrderState.FILLED,
+                fill_qty=submitted_entry.filled_qty,
+                fill_price=submitted_entry.avg_fill_price,
+                remaining_qty=0,
+                side=submitted_entry.side,
+                timestamp=submitted_entry.updated_at or now,
+                message="pre_filled_by_adapter",
+            )
+            self.handle_execution_report(pre_fill_report)
         return OrderPlan(entry=submitted_entry, stop=plan.stop, target=plan.target)
 
     def _submit_or_update_children(self, entry_order: BrokerOrder, now: datetime) -> None:
@@ -499,6 +556,17 @@ class ExecutionEngine:
             self.risk_engine.arm_kill_switch("broker_position_unavailable_on_exit", now)
             self.logger.log_event("broker_position_unavailable_on_exit", symbol=symbol, error=str(exc))
             return None
+
+    def _broker_positions_for_exit(self) -> dict[str, PositionSnapshot]:
+        try:
+            return {
+                symbol: position
+                for symbol, position in self.adapter.get_positions().items()
+                if not position.is_flat
+            }
+        except RuntimeError as exc:
+            self.logger.log_event("broker_positions_unavailable_for_exit", error=str(exc))
+            return {}
 
     def _broker_stop_coverage(self, symbol: str, required_qty: int, now: datetime) -> bool:
         if required_qty <= 0:
@@ -725,7 +793,7 @@ class ExecutionEngine:
         }
         self.state_store.save(snapshot)
 
-    def _restore_state(self) -> None:
+    def _restore_state(self, now: datetime) -> None:
         if self.mode == "backtest":
             return
         snapshot = self.state_store.load()
@@ -747,7 +815,7 @@ class ExecutionEngine:
         disconnect_started_at = snapshot.get("disconnect_started_at")
         self.disconnect_started_at = datetime.fromisoformat(disconnect_started_at) if disconnect_started_at else None
         self.flatten_in_progress = bool(snapshot.get("flatten_in_progress", False))
-        self.risk_engine.restore_state(dict(snapshot.get("risk_state", {})))
+        self.risk_engine.restore_state(dict(snapshot.get("risk_state", {})), now=now)
         self.order_manager.restore_state(dict(snapshot.get("order_manager", {})))
 
     def _sync_chain_state_to_positions(self, now: datetime) -> None:
@@ -788,11 +856,14 @@ class ExecutionEngine:
 
     def _flatten_complete(self) -> bool:
         any_open_positions = any(not position.is_flat for position in self.risk_engine.state.positions.values())
+        any_broker_positions = bool(self._broker_positions_for_exit()) if self.adapter.is_connected() else any_open_positions
         any_flatten_orders = any(order.role == "flatten" for order in self.order_manager.active_orders())
-        return not any_open_positions and not any_flatten_orders
+        return not any_open_positions and not any_broker_positions and not any_flatten_orders
 
     def _has_open_risk(self) -> bool:
-        return any(not position.is_flat for position in self.risk_engine.state.positions.values()) or bool(
+        any_internal_positions = any(not position.is_flat for position in self.risk_engine.state.positions.values())
+        any_broker_positions = bool(self._broker_positions_for_exit()) if self.adapter.is_connected() else False
+        return any_internal_positions or any_broker_positions or bool(
             self.order_manager.active_orders()
         )
 

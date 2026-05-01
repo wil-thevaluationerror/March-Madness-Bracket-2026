@@ -178,6 +178,11 @@ class StrategyConfig:
     # where 2× ATR targets are too far to reach before a reversal or session end).
     atr_min_pct: float = 0.0
 
+    # Permitted confluence types for entry.  OB-only signals have 17.6% WR in OOS data
+    # (-$2,206 total); excluding them is the default for London profiles.
+    # Use frozenset() to allow all types (backtest default for backwards compatibility).
+    allowed_confluence_types: frozenset[str] = frozenset({"OB", "FVG", "OB+FVG"})
+
 
 @dataclass(slots=True)
 class TraderConfig:
