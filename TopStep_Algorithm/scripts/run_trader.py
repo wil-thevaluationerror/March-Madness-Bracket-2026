@@ -9,29 +9,27 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 # Load .env file if present (no-op when python-dotenv is unavailable or file is absent)
 try:
     from dotenv import load_dotenv
-    load_dotenv(PROJECT_ROOT / ".env")
+    load_dotenv(_PROJECT_ROOT / ".env")
 except ImportError:
     pass
 
 from config import available_profiles, build_config
-from data_pipeline.live_feed import TopstepLiveFeed
-from data_pipeline.sweep_live_feed import SweepLiveFeed
-from execution.engine import ExecutionEngine
-from execution.logging import EventLogger
-from execution.order_manager import OrderManager
-from execution.topstepx_adapter import TopstepXAdapter
-from models.orders import Regime, TradingMode
+from trading_system.data_pipeline.live_feed import TopstepLiveFeed
+from trading_system.data_pipeline.sweep_live_feed import SweepLiveFeed
+from trading_system.execution.engine import ExecutionEngine
+from trading_system.execution.logging import EventLogger
+from trading_system.execution.order_manager import OrderManager
+from trading_system.execution.topstepx_adapter import TopstepXAdapter
+from trading_system.core.domain import Regime, TradingMode
 from profiles import PROFILE_TOPSTEP_50K_EXPRESS_LONDON_6B_PAPER, PROFILE_TOPSTEP_50K_EXPRESS_LONDON_6E_PAPER
-from risk.engine import RiskEngine
-from strategy.diagnostics import StrategyDiagnosticsLogger
-from strategy.rules import SignalInput, build_order_intent
+from trading_system.risk.engine import RiskEngine
+from trading_system.strategy.diagnostics import StrategyDiagnosticsLogger
+from trading_system.strategy.rules import SignalInput, build_order_intent
 
 # Profiles that use the London-sweep SignalEngine instead of the VWAP/EMA rules engine
 _LONDON_SWEEP_PROFILES = frozenset({
@@ -53,7 +51,7 @@ def _lock_name(mode: TradingMode, profile: str | None) -> str:
 
 
 def _acquire_runtime_lock(mode: TradingMode, profile: str | None):
-    lock_dir = PROJECT_ROOT / "runtime_logs"
+    lock_dir = _PROJECT_ROOT / "runtime_logs"
     lock_dir.mkdir(parents=True, exist_ok=True)
     lock_path = lock_dir / _lock_name(mode, profile)
     lock_file = lock_path.open("w", encoding="utf-8")
@@ -141,7 +139,7 @@ def _build_live_feed(
     (populated during startup) and shares the adapter's JWT token so
     the feed never needs to authenticate independently.
     """
-    from execution.topstep_live_adapter import LiveTopstepAdapter
+    from trading_system.execution.topstep_live_adapter import LiveTopstepAdapter
 
     adapter = engine.adapter
     # Unwrap TopstepXAdapter router to get the underlying LiveTopstepAdapter
@@ -183,7 +181,7 @@ def _build_sweep_feed(engine: ExecutionEngine) -> SweepLiveFeed | None:
     Reuses the same contract and token infrastructure as ``_build_live_feed``
     but drives the London-sweep ``SignalEngine`` instead of the VWAP rules.
     """
-    from execution.topstep_live_adapter import LiveTopstepAdapter
+    from trading_system.execution.topstep_live_adapter import LiveTopstepAdapter
 
     adapter = engine.adapter
     inner = getattr(adapter, "_impl", None)

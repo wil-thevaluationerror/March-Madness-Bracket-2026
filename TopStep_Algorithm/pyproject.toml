@@ -54,22 +54,10 @@ dev = [
 # Package discovery
 # ---------------------------------------------------------------------------
 [tool.setuptools.packages.find]
-where = ["."]
-exclude = [
-    "tests*",
-    "scripts*",
-    "notebooks*",
-    "docs*",
-    "data*",
-    "output*",
-    "logs*",
-    "results*",
-    "runtime_logs*",
-    "state*",
-]
+where = ["src", "."]
+exclude = ["tests*", "scripts*", "notebooks*", "docs*", "data*", "output*", "logs*", "results*", "runtime_logs*", "state*"]
 
 [tool.setuptools]
-# Standalone modules at root that are not inside a package directory
 py-modules = ["config", "profiles"]
 
 # ---------------------------------------------------------------------------

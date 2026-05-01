@@ -1,14 +1,4 @@
-from __future__ import annotations
-
-from dataclasses import dataclass
-from datetime import datetime
-
-
-@dataclass(slots=True)
-class Bar:
-    timestamp: datetime  # UTC, timezone-aware
-    open: float
-    high: float
-    low: float
-    close: float
-    volume: int
+"""Backward-compatibility shim."""
+import sys
+import trading_system.api.market_data as _mod
+sys.modules[__name__] = _mod

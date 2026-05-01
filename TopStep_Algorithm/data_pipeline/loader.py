@@ -1,11 +1,4 @@
-from __future__ import annotations
-
-from pathlib import Path
-
-import databento as db
-import pandas as pd
-
-
-def load_dbn(path: str | Path) -> pd.DataFrame:
-    data = db.read_dbn(str(path))
-    return data.to_df().reset_index()
+"""Backward-compatibility shim."""
+import sys
+import trading_system.data_pipeline.loader as _mod
+sys.modules[__name__] = _mod
