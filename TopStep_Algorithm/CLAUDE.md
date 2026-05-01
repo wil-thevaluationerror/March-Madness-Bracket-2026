@@ -4,8 +4,8 @@ This file is the authoritative reference for Claude Code and Codex contributors.
 Read it before touching any file in this repository.
 It is updated at every phase tag — never let it fall behind the code.
 
-**Current phase:** `v0.1-stable-flat` (Phase 0 complete)
-**Next phase:** Phase 1 — `src/trading_system/` package layout
+**Current phase:** `v0.2-src-layout` (Phase 1 complete)
+**Next phase:** Phase 2 — Pydantic config system + YAML files
 
 ---
 
@@ -52,110 +52,89 @@ These rules may never be broken by any PR, refactor, or feature addition:
 
 ---
 
-## 2. Current Architecture (v0.1-stable-flat)
+## 2. Current Architecture (v0.2-src-layout)
 
 ### Module map
 
+Canonical code lives under `src/trading_system/`. Root-level packages are backward-compat shims.
+
 ```
-TopStep_Algorithm/              ← repo root; also Python path root (sys.path hack in scripts/)
+src/trading_system/             ← CANONICAL package (pip install -e . installs this)
 │
-├── config.py                   ← re-exports TraderConfig, build_config, profile constants
-│                                  (delegates to backtest/config.py for dataclasses)
-├── profiles.py                 ← imperative profile builders; mutates TraderConfig instances
+├── config.py                   ← ALL config dataclasses (merged from old backtest/config.py)
+│                                  TraderConfig, SessionConfig, RiskLimits, ExecutionConfig,
+│                                  StrategyConfig, TopstepConnectionConfig, SessionWindow
+├── profiles.py                 ← Profile builders (build_config, apply_profile, PROFILE_* consts)
 │
-├── models/
-│   ├── orders.py               ← ALL domain types: OrderIntent, BrokerOrder, Fill,
+├── core/
+│   ├── domain.py               ← ALL domain types: OrderIntent, BrokerOrder, Fill,
 │   │                              PositionSnapshot, Side, Regime, TradingMode,
 │   │                              KillSwitchState, OrderState, ExecutionReport, …
-│   └── instruments.py          ← InstrumentSpec, resolve_instrument()
+│   └── instruments.py          ← InstrumentSpec, resolve_instrument(), infer_symbol_root()
 │
 ├── execution/
-│   ├── engine.py               ← ExecutionEngine — central coordinator; calls RiskEngine,
-│   │                              OrderManager, BrokerAdapter, StateStore, Reconciler
-│   ├── order_manager.py        ← ManagedOrderChain, OrderManager — order lifecycle
+│   ├── engine.py               ← ExecutionEngine — central coordinator
+│   ├── order_manager.py        ← ManagedOrderChain, OrderManager
 │   ├── broker.py               ← BrokerAdapter (abstract protocol)
-│   ├── topstepx_adapter.py     ← TopstepXAdapter (HTTP REST, used in paper mode)
-│   ├── topstep_live_adapter.py ← LiveTopstepAdapter (HTTP + SignalR WebSocket, live mode)
-│   │                              CONTAINS: _infer_role_from_order_id() [fix 2026-05-01]
 │   ├── topstepx_adapter.py     ← TopstepXAdapter (paper HTTP adapter)
-│   ├── reconciler.py           ← Reconciler — broker vs local state check at startup
-│   ├── state_store.py          ← StateStore — JSON-backed, atomic writes via tempfile
-│   ├── scheduler.py            ← SessionScheduler — session window checks, flatten time
+│   ├── topstep_live_adapter.py ← LiveTopstepAdapter (HTTP + SignalR WebSocket, live)
+│   │                              CONTAINS: _infer_role_from_order_id() [fix 2026-05-01]
+│   ├── reconciler.py           ← broker vs local state check at startup
+│   ├── state_store.py          ← JSON-backed state, atomic tempfile writes
+│   ├── scheduler.py            ← SessionScheduler — session window + flatten time checks
 │   └── logging.py              ← EventLogger — structured JSONL event log
 │
 ├── risk/
-│   ├── engine.py               ← RiskEngine + RiskState — stateful quantitative risk checks
-│   └── execution_checks.py     ← validate_intent() — 280-line free function; checks
-│                                  stacking, cluster risk, cooldown, loss limits, etc.
+│   ├── engine.py               ← RiskEngine + RiskState — stateful quantitative checks
+│   └── execution_checks.py     ← validate_intent() — all quantitative risk gates
 │
 ├── strategy/
 │   ├── rules.py                ← generate_intents(), build_order_intent(), SignalInput
 │   ├── signal.py               ← SignalEngine — sweep/reentry signal generation
-│   ├── sweep_detector.py       ← SweepDetector — liquidity sweep detection
-│   ├── asian_range.py          ← AsianRangeCalculator — overnight range computation
-│   ├── confluence.py           ← ConfluenceScorer — multi-factor signal scoring
-│   ├── intent_bridge.py        ← IntentBridge — signal-to-intent conversion for Model B
+│   ├── sweep_detector.py       ← SweepDetector
+│   ├── asian_range.py          ← AsianRangeCalculator
+│   ├── confluence.py           ← ConfluenceScorer
+│   ├── intent_bridge.py        ← signal-to-intent conversion (Model B)
 │   └── diagnostics.py          ← StrategyDiagnosticsLogger
 │
 ├── features/
 │   └── indicators.py           ← EMA, VWAP, ATR, ADX, volume metrics (pure functions)
 │
 ├── backtest/
-│   ├── config.py               ← AUTHORITATIVE source of all config dataclasses
-│   │                              (TraderConfig, SessionConfig, RiskLimits,
-│   │                               ExecutionConfig, StrategyConfig, TopstepConnectionConfig)
-│   ├── engine.py               ← BacktestEngine — historical bar simulation
-│   ├── simulator.py            ← BarSimulator — tick-by-tick simulation loop
-│   ├── metrics.py              ← BacktestMetrics — Sharpe, drawdown, win rate, etc.
-│   ├── walk_forward.py         ← WalkForwardRunner — IS/OOS window validation
-│   ├── data_loader.py          ← DataLoader — Databento DBN file reader
-│   ├── signal_ledger.py        ← SignalLedger — per-bar signal audit trail
-│   ├── raw_setup_ledger.py     ← RawSetupLedger — raw filter state per bar
-│   ├── reporter.py             ← BacktestReporter — HTML dashboard + JSON summary
-│   ├── feature_importance.py   ← FeatureImportanceAnalyzer
-│   ├── run_backtest.py         ← CLI entry point for backtests
-│   └── dashboard.py            ← build_dashboard_payload()
+│   ├── engine.py / simulator.py / metrics.py / walk_forward.py
+│   ├── data_loader.py / signal_ledger.py / raw_setup_ledger.py
+│   ├── reporter.py / dashboard.py / feature_importance.py
+│   └── run_backtest.py         ← CLI entry point for backtests
 │
 ├── data_pipeline/
-│   ├── live_feed.py            ← TopstepLiveFeed — Databento live market data (Model A)
-│   ├── sweep_live_feed.py      ← SweepLiveFeed — live feed for London sweep Model B
-│   ├── loader.py               ← historical bar loader
-│   └── preprocess.py           ← bar preprocessing utilities
+│   ├── live_feed.py            ← TopstepLiveFeed (Model A, Databento live)
+│   ├── sweep_live_feed.py      ← SweepLiveFeed (Model B, London sweep)
+│   ├── loader.py / preprocess.py
 │
-├── api/
-│   └── market_data.py          ← market data helpers
-│
-├── scripts/
-│   └── run_trader.py           ← CURRENT LIVE ENTRY POINT
-│                                  Adds PROJECT_ROOT to sys.path (temporary hack)
-│                                  Handles --profile, --mode, --enforce-live-rules flags
-│                                  Creates per-profile lock file in runtime_logs/
-│                                  Dispatches to TopstepLiveFeed or SweepLiveFeed
-│                                  Calls ExecutionEngine.on_bar() in the main loop
-│
-└── tests/
-    ├── test_execution.py
-    ├── test_gaps_1_4.py
-    ├── test_intent_bridge.py
-    ├── test_ml_diagnostics.py
-    ├── test_strategy_diagnostics.py
-    └── test_walk_forward_p1.py
+└── api/
+    └── market_data.py
+
+Root shims (backward-compat only — do not add logic here):
+  config.py    → re-exports from trading_system.config + trading_system.profiles
+  profiles.py  → re-exports from trading_system.profiles
+  execution/   → sys.modules aliasing shim
+  risk/        → sys.modules aliasing shim
+  strategy/    → sys.modules aliasing shim
+  backtest/    → sys.modules aliasing shim
+  data_pipeline/ → sys.modules aliasing shim
+  features/    → sys.modules aliasing shim
+  api/         → sys.modules aliasing shim
+  models/      → sys.modules aliasing shim (models.orders → trading_system.core.domain)
 ```
 
-### Current config inheritance chain
+### Config import path (v0.2+)
 
 ```
-backtest/config.py          ← defines all frozen dataclasses
-    ↑ re-exported by
-config.py (root)            ← adds PROFILE_* constants, available_profiles(), build_config()
-    ↑ imported by
-profiles.py                 ← build_config() + _apply_*() mutators for each profile
-    ↑ imported by
-scripts/run_trader.py       ← calls build_config(profile) to get a TraderConfig
+trading_system/config.py    ← single source of truth for all config dataclasses
+trading_system/profiles.py  ← profile builders; imports from trading_system.config
+root config.py              ← shim; re-exports both
+scripts/run_trader.py       ← imports from config (shim) or trading_system.* directly
 ```
-
-**In Phase 2**, `backtest/config.py` and root `config.py` will merge into
-`trading_system/config.py` (Pydantic v2) and profile logic will move to YAML overlays.
 
 ---
 
@@ -269,11 +248,10 @@ LIVE_TRADING_CONFIRMED        # must be "true" to enable live mode
 
 ## 10. Known Issues / Open Items (as of 2026-05-01)
 
-1. **`run_trader.py` uses sys.path hack** — `PROJECT_ROOT` added to `sys.path` at line 13.
-   Fixed in Phase 1 when `pip install -e .` makes it unnecessary.
+1. ~~`run_trader.py` uses sys.path hack~~ **Fixed in Phase 1.** `pip install -e .` handles it.
 
-2. **`backtest/config.py` is the true source of config dataclasses**, not `config.py` at root.
-   Root `config.py` re-exports from it. Unified in Phase 2.
+2. ~~`backtest/config.py` is the true source of config dataclasses~~ **Fixed in Phase 1.**
+   Merged into `trading_system/config.py`. Root `config.py` is now a shim.
 
 3. **`RiskState.kill_switch` is in-memory only** — resets on restart.
    File-backed `KillSwitch` added in Phase 5.
