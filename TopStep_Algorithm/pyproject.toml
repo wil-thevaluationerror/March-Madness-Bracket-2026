@@ -1,0 +1,155 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "topstep-algorithm"
+version = "0.1.0"
+description = "Multi-model algorithmic futures trading system for TopStep/TopStepX"
+requires-python = ">=3.12"
+dependencies = [
+    # Data
+    "pandas>=2.2",
+    "numpy>=1.26",
+    "scipy>=1.13",
+    "databento>=0.74",
+    "zstandard>=0.24",
+    "PyYAML>=6.0",
+    # ML
+    "scikit-learn>=1.5",
+    "lightgbm>=4.6",
+    # Broker / network
+    "aiohttp>=3.9",
+    "httpx>=0.27",
+    "requests>=2.32",
+    "websocket-client>=1.8",
+    # Config / env
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "python-dotenv>=1.0",
+    # Visualisation
+    "plotly>=5.24",
+    "matplotlib>=3.9",
+    "seaborn>=0.13",
+    # Timezone
+    "tzdata>=2023.3",
+    # CLI
+    "typer>=0.20",
+    "rich>=13.7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.4",
+    "pytest-cov",
+    "ruff>=0.4",
+    "mypy>=1.11",
+    "import-linter>=2.0",
+    "pandas-stubs",
+    "types-requests",
+    "types-PyYAML",
+]
+
+# ---------------------------------------------------------------------------
+# Package discovery
+# ---------------------------------------------------------------------------
+[tool.setuptools.packages.find]
+where = ["."]
+exclude = [
+    "tests*",
+    "scripts*",
+    "notebooks*",
+    "docs*",
+    "data*",
+    "output*",
+    "logs*",
+    "results*",
+    "runtime_logs*",
+    "state*",
+]
+
+[tool.setuptools]
+# Standalone modules at root that are not inside a package directory
+py-modules = ["config", "profiles"]
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "--tb=short -q"
+markers = [
+    "unit: fast, isolated, no I/O",
+    "integration: multi-component, fixture data",
+    "live_safety: safety invariant tests using PaperBroker + virtual clock",
+    "regression: fixed historical backtest vs committed baseline",
+    "slow: marks tests as slow (deselect with -m 'not slow')",
+]
+
+# ---------------------------------------------------------------------------
+# ruff
+# ---------------------------------------------------------------------------
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["."]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "C4",   # flake8-comprehensions
+    "UP",   # pyupgrade
+    "SIM",  # flake8-simplify
+    "TCH",  # flake8-type-checking
+    "RUF",  # ruff-specific
+]
+ignore = [
+    "E501",   # line too long (handled by formatter)
+    "B008",   # do not perform function calls in default arguments
+    "SIM108", # ternary operator (often less readable in trading logic)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["trading_system", "config", "profiles", "execution",
+                     "risk", "strategy", "features", "backtest",
+                     "data_pipeline", "models", "api"]
+
+# ---------------------------------------------------------------------------
+# mypy
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+no_implicit_optional = true
+strict_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+# Relax strictness on third-party libs that lack stubs
+[[tool.mypy.overrides]]
+module = [
+    "databento.*",
+    "lightgbm.*",
+    "plotly.*",
+    "seaborn.*",
+    "scipy.*",
+    "sklearn.*",
+]
+ignore_missing_imports = true
+
+# ---------------------------------------------------------------------------
+# import-linter  (Phase 7 — contracts added then)
+# ---------------------------------------------------------------------------
+[tool.importlinter]
+root_packages = ["trading_system"]
+# Contracts will be populated in Phase 7 once src/ layout is in place.
